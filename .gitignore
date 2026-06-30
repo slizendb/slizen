@@ -1,0 +1,10 @@
+bin/
+dist/
+coverage.out
+*.test
+*.prof
+.DS_Store
+slizen.toml
+tmp/
+.gocache/
+.gomodcache/

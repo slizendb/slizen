@@ -1,0 +1,63 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 2s
+          --health-timeout 1s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Download modules
+        run: go mod download
+      - name: Check formatting
+        run: |
+          gofmt -w .
+          git diff --exit-code
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Race
+        run: go test -race ./...
+      - name: Build
+        run: go build ./...
+      - name: Valkey smoke
+        run: |
+          SLIZEN_UPSTREAM_ADDRESS=127.0.0.1:6379 \
+          SLIZEN_PROXY_LISTEN=127.0.0.1:6380 \
+          SLIZEN_ADMIN_LISTEN=127.0.0.1:9090 \
+          SLIZEN_LOG_LEVEL=warn \
+            go run ./cmd/slizend > /tmp/slizend.log 2>&1 &
+          slizend_pid=$!
+          trap 'kill "${slizend_pid}" 2>/dev/null || true; wait "${slizend_pid}" 2>/dev/null || true; cat /tmp/slizend.log' EXIT
+
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9090/readyz >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:9090/readyz
+
+          go run ./cmd/slizenctl demo black-friday \
+            --redis 127.0.0.1:6380 \
+            --admin http://127.0.0.1:9090 \
+            --key product:iphone_17 \
+            --workers 4 \
+            --duration 3s

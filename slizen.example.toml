@@ -1,0 +1,42 @@
+[proxy]
+listen = "0.0.0.0:6380"
+read_timeout = "3s"
+write_timeout = "3s"
+shutdown_timeout = "10s"
+
+[admin]
+listen = "127.0.0.1:9090"
+expose_raw_keys = false
+
+[upstream]
+address = "127.0.0.1:6379"
+username = ""
+password = ""
+database = 0
+dial_timeout = "2s"
+read_timeout = "2s"
+write_timeout = "2s"
+
+[cache]
+max_bytes = 67108864
+max_entries = 100000
+max_local_ttl = "30s"
+allow_stale_on_upstream_error = false
+stale_grace = "0s"
+negative_ttl = "0s"
+
+[hotness]
+window = "1s"
+ewma_alpha = 0.5
+promotion_threshold = 100
+demotion_threshold = 20
+minimum_hot_windows = 2
+cooldown = "30s"
+max_tracked_keys = 100000
+
+[privacy]
+key_hash_salt = "change-me"
+
+[logging]
+level = "info"
+format = "json"
