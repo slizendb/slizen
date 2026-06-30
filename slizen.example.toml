@@ -37,7 +37,8 @@ cooldown = "30s"
 max_tracked_keys = 100000
 
 [privacy]
-key_hash_salt = "change-me"
+key_visibility = "hash"
+key_hash_secret = "change-me"
 
 [logging]
 level = "info"

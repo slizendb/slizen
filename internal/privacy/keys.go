@@ -1,17 +1,30 @@
 package privacy
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 )
 
-// KeyIdentifier returns either the raw key or a stable salted hash. The hash is
-// intentionally short enough for humans and long enough to avoid practical
-// collisions in admin output.
-func KeyIdentifier(key, salt string, exposeRaw bool) string {
-	if exposeRaw {
+const (
+	VisibilityHash  = "hash"
+	VisibilityPlain = "plain"
+)
+
+// KeyIdentifier returns either the raw key or a stable HMAC-based identifier.
+// The hash is intentionally short enough for humans and long enough to avoid
+// practical collisions in admin output.
+func KeyIdentifier(key, secret, visibility string) string {
+	if visibility == VisibilityPlain {
 		return key
 	}
-	sum := sha256.Sum256([]byte(salt + "\x00" + key))
-	return "sha256:" + hex.EncodeToString(sum[:16])
+	return HMACKeyIdentifier(key, secret)
+}
+
+// HMACKeyIdentifier returns a privacy-safe stable key identifier.
+func HMACKeyIdentifier(key, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(key))
+	sum := mac.Sum(nil)
+	return "hmac-sha256:" + hex.EncodeToString(sum[:16])
 }

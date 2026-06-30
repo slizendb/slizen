@@ -98,7 +98,7 @@ The cache is disposable. Restarting Slizen may lose cached values and hotness st
 
 The admin API is unauthenticated in v0.1 and binds to `127.0.0.1:9090` by default. Do not expose it publicly without an external authentication and network policy layer.
 
-Slizen never exposes raw values in logs, metrics, or the admin API. Admin hot-key output uses salted hashes by default. Do not use `admin.expose_raw_keys = true` unless the admin listener is private and trusted.
+Slizen never exposes raw values in logs, metrics, or the admin API. Admin hot-key output uses HMAC-SHA256 identifiers by default. Set `privacy.key_visibility = "plain"` only on private trusted admin listeners during local debugging. Never use Redis keys as Prometheus labels.
 
 ## Observability
 

@@ -45,3 +45,7 @@ The daemon exposes:
 The active mode is exposed in `/v1/status`.
 
 The admin listener is unauthenticated in v0.1 and must not be exposed publicly.
+
+## Privacy
+
+Hot-key output uses HMAC-SHA256 key identifiers by default. Raw keys are available only when `privacy.key_visibility = "plain"` or the legacy `admin.expose_raw_keys` shortcut is enabled for a trusted private admin listener. Logs use HMAC identifiers regardless of admin output visibility.

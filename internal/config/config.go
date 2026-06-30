@@ -65,7 +65,9 @@ type HotnessConfig struct {
 }
 
 type PrivacyConfig struct {
-	KeyHashSalt string `toml:"key_hash_salt"`
+	KeyVisibility string `toml:"key_visibility"`
+	KeyHashSecret string `toml:"key_hash_secret"`
+	KeyHashSalt   string `toml:"key_hash_salt"`
 }
 
 type LoggingConfig struct {
@@ -112,7 +114,9 @@ func Default() Config {
 			MaxTrackedKeys:     100000,
 		},
 		Privacy: PrivacyConfig{
-			KeyHashSalt: "change-me",
+			KeyVisibility: "hash",
+			KeyHashSecret: "change-me",
+			KeyHashSalt:   "change-me",
 		},
 		Logging: LoggingConfig{
 			Level:  "info",
@@ -200,7 +204,9 @@ type rawHotness struct {
 }
 
 type rawPrivacy struct {
-	KeyHashSalt *string `toml:"key_hash_salt"`
+	KeyVisibility *string `toml:"key_visibility"`
+	KeyHashSecret *string `toml:"key_hash_secret"`
+	KeyHashSalt   *string `toml:"key_hash_salt"`
 }
 
 type rawLogging struct {
@@ -290,7 +296,16 @@ func applyRaw(cfg *Config, raw rawConfig) error {
 	if raw.Hotness.MaxTrackedKeys != nil {
 		cfg.Hotness.MaxTrackedKeys = *raw.Hotness.MaxTrackedKeys
 	}
+	if raw.Privacy.KeyVisibility != nil {
+		cfg.Privacy.KeyVisibility = *raw.Privacy.KeyVisibility
+	}
+	if raw.Privacy.KeyHashSecret != nil {
+		cfg.Privacy.KeyHashSecret = *raw.Privacy.KeyHashSecret
+	}
 	if raw.Privacy.KeyHashSalt != nil {
+		if raw.Privacy.KeyHashSecret == nil {
+			cfg.Privacy.KeyHashSecret = *raw.Privacy.KeyHashSalt
+		}
 		cfg.Privacy.KeyHashSalt = *raw.Privacy.KeyHashSalt
 	}
 	if raw.Logging.Level != nil {
@@ -340,6 +355,8 @@ func applyEnv(cfg *Config) error {
 	setString("SLIZEN_UPSTREAM_ADDRESS", &cfg.Upstream.Address)
 	setString("SLIZEN_UPSTREAM_USERNAME", &cfg.Upstream.Username)
 	setString("SLIZEN_UPSTREAM_PASSWORD", &cfg.Upstream.Password)
+	setString("SLIZEN_KEY_VISIBILITY", &cfg.Privacy.KeyVisibility)
+	setString("SLIZEN_KEY_HASH_SECRET", &cfg.Privacy.KeyHashSecret)
 	setString("SLIZEN_LOG_LEVEL", &cfg.Logging.Level)
 	return nil
 }
@@ -412,6 +429,14 @@ func Validate(cfg Config) error {
 	if cfg.Hotness.MinimumHotWindows <= 0 {
 		errs = append(errs, errors.New("hotness.minimum_hot_windows must be greater than zero"))
 	}
+	switch cfg.Privacy.KeyVisibility {
+	case "hash", "plain":
+	default:
+		errs = append(errs, errors.New("privacy.key_visibility must be hash or plain"))
+	}
+	if cfg.Privacy.KeyVisibility == "hash" && strings.TrimSpace(cfg.Privacy.KeyHashSecret) == "" {
+		errs = append(errs, errors.New("privacy.key_hash_secret is required when key_visibility is hash"))
+	}
 	switch cfg.Logging.Level {
 	case "debug", "info", "warn", "error":
 	default:
@@ -436,12 +461,22 @@ func RedactedSummary(cfg Config) map[string]any {
 		"upstream_username": redactPresence(cfg.Upstream.Username),
 		"upstream_password": redactPresence(cfg.Upstream.Password),
 		"upstream_database": cfg.Upstream.Database,
+		"key_visibility":    EffectiveKeyVisibility(cfg),
+		"key_hash_secret":   redactPresence(cfg.Privacy.KeyHashSecret),
 		"cache_max_bytes":   cfg.Cache.MaxBytes,
 		"cache_max_entries": cfg.Cache.MaxEntries,
 		"cache_max_ttl":     cfg.Cache.MaxLocalTTL.String(),
 		"hotness_window":    cfg.Hotness.Window.String(),
 		"log_level":         cfg.Logging.Level,
 	}
+}
+
+// EffectiveKeyVisibility returns the admin-visible key identity mode.
+func EffectiveKeyVisibility(cfg Config) string {
+	if cfg.Admin.ExposeRawKeys {
+		return "plain"
+	}
+	return cfg.Privacy.KeyVisibility
 }
 
 func redactPresence(value string) string {

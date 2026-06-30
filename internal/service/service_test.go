@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -143,6 +145,39 @@ func TestObserveModeDoesNotCoalesceGETs(t *testing.T) {
 
 	if calls := up.GetCallCount("k"); calls != 25 {
 		t.Fatalf("observe mode should forward every GET, got %d upstream calls", calls)
+	}
+}
+
+func TestPrivacyHashModeDoesNotLeakRawKeyOrSecret(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	up := testutil.NewFakeUpstream()
+	up.Put("product:iphone_17", []byte("value"), 0)
+	svc := newTestServiceWithConfig(up, clock, func(cfg *config.Config) {
+		cfg.Privacy.KeyVisibility = "hash"
+		cfg.Privacy.KeyHashSecret = "super-secret"
+	})
+	promoteAndCache(t, svc, clock, "product:iphone_17")
+
+	hotKeysJSON, err := json.Marshal(svc.HotKeys(10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(hotKeysJSON), "product:iphone_17") || strings.Contains(string(hotKeysJSON), "iphone") {
+		t.Fatalf("hotkeys leaked raw key: %s", hotKeysJSON)
+	}
+	if !strings.Contains(string(hotKeysJSON), "hmac-sha256:") {
+		t.Fatalf("hotkeys should expose HMAC identifier: %s", hotKeysJSON)
+	}
+
+	statusJSON, err := json.Marshal(svc.Status(context.Background()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(statusJSON), "super-secret") {
+		t.Fatalf("status leaked key hash secret: %s", statusJSON)
+	}
+	if !strings.Contains(string(statusJSON), `"key_visibility":"hash"`) {
+		t.Fatalf("status did not expose key visibility: %s", statusJSON)
 	}
 }
 

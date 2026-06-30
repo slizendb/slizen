@@ -46,7 +46,8 @@ cooldown = "5s"
 max_tracked_keys = 100
 
 [privacy]
-key_hash_salt = "test"
+key_visibility = "hash"
+key_hash_secret = "test"
 
 [logging]
 level = "debug"
@@ -75,6 +76,8 @@ func TestEnvironmentOverrides(t *testing.T) {
 	t.Setenv("SLIZEN_UPSTREAM_ADDRESS", "redis.internal:6379")
 	t.Setenv("SLIZEN_UPSTREAM_USERNAME", "user")
 	t.Setenv("SLIZEN_UPSTREAM_PASSWORD", "secret")
+	t.Setenv("SLIZEN_KEY_VISIBILITY", "plain")
+	t.Setenv("SLIZEN_KEY_HASH_SECRET", "hash-secret")
 	t.Setenv("SLIZEN_LOG_LEVEL", "warn")
 
 	cfg, err := Load("")
@@ -90,6 +93,9 @@ func TestEnvironmentOverrides(t *testing.T) {
 	if cfg.Upstream.Username != "user" || cfg.Upstream.Password != "secret" {
 		t.Fatal("credential override not applied")
 	}
+	if cfg.Privacy.KeyVisibility != "plain" || cfg.Privacy.KeyHashSecret != "hash-secret" {
+		t.Fatalf("privacy overrides not applied: %+v", cfg.Privacy)
+	}
 	if cfg.Logging.Level != "warn" {
 		t.Fatalf("log level override not applied: %s", cfg.Logging.Level)
 	}
@@ -98,6 +104,22 @@ func TestEnvironmentOverrides(t *testing.T) {
 func TestValidationRejectsBadMode(t *testing.T) {
 	cfg := Default()
 	cfg.Mode = "mirror"
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestValidationRejectsBadKeyVisibility(t *testing.T) {
+	cfg := Default()
+	cfg.Privacy.KeyVisibility = "rawish"
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestValidationRejectsMissingHashSecret(t *testing.T) {
+	cfg := Default()
+	cfg.Privacy.KeyHashSecret = ""
 	if err := Validate(cfg); err == nil {
 		t.Fatal("expected validation error")
 	}

@@ -71,7 +71,7 @@ func (s *Server) handleHotKeys(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	writeJSON(w, map[string]any{"hotkeys": s.svc.HotKeys(limit, s.cfg.ExposeRawKeys)})
+	writeJSON(w, map[string]any{"hotkeys": s.svc.HotKeys(limit)})
 }
 
 func (s *Server) handleCache(w http.ResponseWriter, r *http.Request) {

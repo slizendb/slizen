@@ -100,7 +100,7 @@ curl http://127.0.0.1:9090/v1/cache
 curl http://127.0.0.1:9090/metrics
 ```
 
-Raw values никогда не попадают в логи, метрики или admin API. Hot-key output по умолчанию показывает salted hash ключа.
+Raw values никогда не попадают в логи, метрики или admin API. Hot-key output по умолчанию показывает HMAC-SHA256 identifier ключа. `privacy.key_visibility = "plain"` включай только на приватном admin listener для локальной отладки.
 
 ## Разработка
 

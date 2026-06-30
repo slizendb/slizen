@@ -48,7 +48,6 @@ Core promise:
 
 ## Next Useful Milestones
 
-- privacy-aware key identity with HMAC-based hashes;
 - per-prefix cache policy;
 - Valkey integration tests in CI;
 - reproducible benchmark harness with Zipf and moving-hot-key workloads;

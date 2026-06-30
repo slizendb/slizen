@@ -14,7 +14,6 @@ Slizen replicates hot objects before they burn your database. Redis or Valkey re
 
 ## v0.2: Static multi-node cache mesh
 
-- Privacy-aware key identity modes.
 - Per-prefix cache policy.
 - Reproducible benchmark harness with skewed workloads.
 - Multiple Slizen nodes.

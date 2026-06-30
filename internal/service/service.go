@@ -53,6 +53,7 @@ type Service struct {
 type Status struct {
 	Version           string `json:"version"`
 	Mode              string `json:"mode"`
+	KeyVisibility     string `json:"key_visibility"`
 	Uptime            string `json:"uptime"`
 	UpstreamStatus    string `json:"upstream_status"`
 	CacheBytes        int64  `json:"cache_bytes"`
@@ -324,6 +325,7 @@ func (s *Service) Status(ctx context.Context) Status {
 	return Status{
 		Version:           s.version,
 		Mode:              s.cfg.Mode,
+		KeyVisibility:     config.EffectiveKeyVisibility(s.cfg),
 		Uptime:            s.clock.Now().Sub(s.started).Round(time.Second).String(),
 		UpstreamStatus:    upstreamStatus,
 		CacheBytes:        cacheStats.Bytes,
@@ -340,14 +342,15 @@ func (s *Service) Status(ctx context.Context) Status {
 	}
 }
 
-func (s *Service) HotKeys(limit int, exposeRaw bool) []HotKey {
+func (s *Service) HotKeys(limit int) []HotKey {
 	s.handleTransitions(s.tracker.Advance())
 	snapshots := s.tracker.Snapshots(limit)
+	visibility := config.EffectiveKeyVisibility(s.cfg)
 	out := make([]HotKey, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		cacheSnapshot, cached := s.cache.Inspect(snapshot.Key)
 		item := HotKey{
-			ID:            privacy.KeyIdentifier(snapshot.Key, s.cfg.Privacy.KeyHashSalt, exposeRaw),
+			ID:            privacy.KeyIdentifier(snapshot.Key, s.cfg.Privacy.KeyHashSecret, visibility),
 			State:         string(snapshot.State),
 			Score:         snapshot.Score,
 			RequestRate:   snapshot.RequestRate,
@@ -416,7 +419,7 @@ func (s *Service) localTTL(upstreamTTL time.Duration) time.Duration {
 
 func (s *Service) handleTransitions(transitions []hotness.Transition) {
 	for _, transition := range transitions {
-		keyID := privacy.KeyIdentifier(transition.Key, s.cfg.Privacy.KeyHashSalt, false)
+		keyID := privacy.HMACKeyIdentifier(transition.Key, s.cfg.Privacy.KeyHashSecret)
 		if transition.To == hotness.StateHot && transition.From != hotness.StateHot {
 			s.metrics.Promotion()
 			s.logger.Info("hot key promoted", "key_id", keyID, "from", transition.From, "to", transition.To)

@@ -2,16 +2,16 @@
 
 Create these as separate issues rather than one mega-ticket.
 
-## 1. Add privacy-aware key identity
+## 1. Add per-prefix cache policy
 
-Labels: `milestone/v0.2`, `privacy`, `observability`
+Labels: `milestone/v0.2`, `correctness`, `configuration`
 
 Acceptance:
 
-- add `SLIZEN_KEY_VISIBILITY=hash|plain`;
-- use HMAC-SHA256 with a secret for hash mode;
-- expose visibility mode in status, never the secret;
-- prove raw keys do not appear in admin JSON when hash mode is active.
+- support longest-prefix policy matching;
+- support `deny`, `observe`, and `cache` modes per prefix;
+- enforce per-prefix max item bytes and max TTL;
+- add an ADR before implementation.
 
 ## 2. Add fuzz tests for command handling
 

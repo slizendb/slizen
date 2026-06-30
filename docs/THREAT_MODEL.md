@@ -22,7 +22,7 @@ This document covers Slizen v0.1 as a single-node Redis/Valkey proxy.
 | Risk | Mitigation |
 | --- | --- |
 | Raw values leak through logs or admin output | Do not log values; admin cache endpoints expose aggregate metadata only. |
-| Key names leak through telemetry | Hot-key output hashes keys by default; keys are never Prometheus labels. |
+| Key names leak through telemetry | Hot-key output uses HMAC-SHA256 identifiers by default; keys are never Prometheus labels. |
 | Metrics cardinality explosion | Metrics labels are normalized to bounded command/result/reason sets. |
 | Unbounded request bodies | Admin purge uses a bounded body reader. |
 | Cache memory growth | Cache bytes and entry count are bounded. |

@@ -16,6 +16,7 @@ The first valuable user workflow is not a distributed mesh. It is this:
 - v0.1 is single-node.
 - Direct upstream writes may remain stale in Slizen until local TTL expiration.
 - Slizen intentionally supports only a small command set.
+- Hot-key telemetry should use HMAC-based key identifiers by default.
 
 ## Release Position
 
