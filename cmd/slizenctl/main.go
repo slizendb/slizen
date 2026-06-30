@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/slizendb/slizen/internal/buildinfo"
 )
 
 const defaultAdmin = "http://127.0.0.1:9090"
@@ -34,6 +35,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return errors.New("missing command")
 	}
 	switch args[0] {
+	case "version":
+		_, err := fmt.Fprintln(stdout, buildinfo.String())
+		return err
 	case "healthz":
 		return textEndpointCmd(args[1:], stdout, stderr, "/healthz")
 	case "readyz":
@@ -44,6 +48,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return hotkeysCmd(args[1:], stdout, stderr)
 	case "cache":
 		return cacheCmd(args[1:], stdout, stderr)
+	case "benchmark":
+		return benchmarkCmd(args[1:], stdout, stderr)
 	case "demo":
 		return demoCmd(args[1:], stdout, stderr)
 	default:
@@ -74,7 +80,7 @@ func statusCmd(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	value, err := httpGet(*adminURL + "/v1/status")
+	value, err := httpGet(strings.TrimRight(*adminURL, "/") + "/v1/status")
 	return printJSON(stdout, value, err)
 }
 
@@ -86,7 +92,7 @@ func hotkeysCmd(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	value, err := httpGet(*adminURL + "/v1/hotkeys?limit=" + strconv.Itoa(*limit))
+	value, err := httpGet(strings.TrimRight(*adminURL, "/") + "/v1/hotkeys?limit=" + strconv.Itoa(*limit))
 	return printJSON(stdout, value, err)
 }
 
@@ -109,7 +115,7 @@ func cacheCmd(args []string, stdout, stderr io.Writer) error {
 		}
 		body = encoded
 	}
-	value, err := httpPost(*adminURL+"/v1/cache/purge", body)
+	value, err := httpPost(strings.TrimRight(*adminURL, "/")+"/v1/cache/purge", body)
 	return printJSON(stdout, value, err)
 }
 
@@ -322,5 +328,5 @@ func hitRatio(status map[string]any) float64 {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: slizenctl healthz|readyz|status|hotkeys|cache|demo")
+	fmt.Fprintln(w, "usage: slizenctl version|healthz|readyz|status|hotkeys|cache|benchmark|demo")
 }

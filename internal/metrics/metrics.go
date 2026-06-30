@@ -15,6 +15,7 @@ type Snapshot struct {
 	CacheHits         uint64 `json:"cache_hits"`
 	CacheMisses       uint64 `json:"cache_misses"`
 	UpstreamRequests  uint64 `json:"upstream_requests"`
+	UpstreamGets      uint64 `json:"upstream_gets"`
 	UpstreamErrors    uint64 `json:"upstream_errors"`
 	Promotions        uint64 `json:"promotions"`
 	Demotions         uint64 `json:"demotions"`
@@ -45,6 +46,7 @@ type Recorder struct {
 	totalCacheHits    atomic.Uint64
 	totalCacheMisses  atomic.Uint64
 	totalUpstreamReqs atomic.Uint64
+	totalUpstreamGets atomic.Uint64
 	totalUpstreamErrs atomic.Uint64
 	totalPromotions   atomic.Uint64
 	totalDemotions    atomic.Uint64
@@ -126,6 +128,9 @@ func (r *Recorder) ObserveCache(entries int, bytes int64, evictions uint64) {
 func (r *Recorder) ObserveUpstream(command string, d time.Duration, err error) {
 	command = commandLabel(command)
 	r.totalUpstreamReqs.Add(1)
+	if command == "GET" {
+		r.totalUpstreamGets.Add(1)
+	}
 	r.upstreamReqs.WithLabelValues(command).Inc()
 	result := "ok"
 	if err != nil {
@@ -179,6 +184,7 @@ func (r *Recorder) Snapshot() Snapshot {
 		CacheHits:         r.totalCacheHits.Load(),
 		CacheMisses:       r.totalCacheMisses.Load(),
 		UpstreamRequests:  r.totalUpstreamReqs.Load(),
+		UpstreamGets:      r.totalUpstreamGets.Load(),
 		UpstreamErrors:    r.totalUpstreamErrs.Load(),
 		Promotions:        r.totalPromotions.Load(),
 		Demotions:         r.totalDemotions.Load(),

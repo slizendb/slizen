@@ -62,6 +62,8 @@ The Compose stack exposes Valkey directly on `127.0.0.1:6379`, Slizen RESP on `1
 
 ## Supported Commands
 
+See [docs/REDIS_COMPATIBILITY.md](docs/REDIS_COMPATIBILITY.md) for the v0.1 compatibility contract.
+
 | Command | Behavior |
 | --- | --- |
 | `GET` | Cache-aware read in `cache` mode; observation and upstream forwarding only in `observe` mode. |
@@ -119,19 +121,23 @@ go run ./cmd/slizenctl cache purge --key product:iphone_17 --admin http://127.0.
 
 ## Benchmarks and Load Demo
 
+Reproducible hot-key benchmark:
+
+```sh
+make demo-up
+make benchmark
+make demo-report
+```
+
+The benchmark compares direct origin GETs with Slizen cold and hot reads, then reports cache hit ratio and upstream GET reduction from real `/v1/status` counters. See [docs/BENCHMARKING.md](docs/BENCHMARKING.md).
+
 Go microbenchmarks:
 
 ```sh
 go test -bench=. ./...
 ```
 
-Local comparison helper:
-
-```sh
-./scripts/loadtest.sh
-```
-
-The helper compares direct Valkey requests, Slizen before promotion, and Slizen after promotion using local tools. It reports total operations, elapsed time, operations per second, cache hit ratio, and Slizen upstream request count. This is a local demonstration, not a scientific production benchmark. Do not assume Slizen is faster for every workload.
+This is local evidence, not a scientific production benchmark. Do not assume Slizen is faster for every workload.
 
 ## Development
 
@@ -142,6 +148,7 @@ go test ./...
 go test -race ./...
 go build ./...
 make check
+make release-check
 ```
 
 Docker:
@@ -150,8 +157,16 @@ Docker:
 make demo-up
 make demo
 make smoke
+make demo-report
 make demo-down
 ```
+
+Release prep:
+
+- [docs/BENCHMARKING.md](docs/BENCHMARKING.md)
+- [docs/REDIS_COMPATIBILITY.md](docs/REDIS_COMPATIBILITY.md)
+- [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
+- [docs/RELEASE_NOTES_v0.1.md](docs/RELEASE_NOTES_v0.1.md)
 
 ## Limitations
 

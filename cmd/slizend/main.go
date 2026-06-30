@@ -13,14 +13,13 @@ import (
 	"time"
 
 	"github.com/slizendb/slizen/internal/admin"
+	"github.com/slizendb/slizen/internal/buildinfo"
 	"github.com/slizendb/slizen/internal/config"
 	"github.com/slizendb/slizen/internal/metrics"
 	"github.com/slizendb/slizen/internal/proxy"
 	"github.com/slizendb/slizen/internal/service"
 	"github.com/slizendb/slizen/internal/upstream"
 )
-
-var version = "0.1.0"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -39,7 +38,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if *showVersion {
-		_, _ = fmt.Fprintln(stdout, version)
+		_, _ = fmt.Fprintln(stdout, buildinfo.String())
 		return nil
 	}
 
@@ -53,7 +52,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	logger := newLogger(cfg, stderr)
-	logger.Info("starting slizend", "version", version, "config", config.RedactedSummary(cfg))
+	logger.Info("starting slizend", "version", buildinfo.Version, "commit", buildinfo.Commit, "config", config.RedactedSummary(cfg))
 
 	upstreamClient := upstream.NewRedisClient(cfg.Upstream)
 	pingCtx, cancelPing := context.WithTimeout(context.Background(), cfg.Upstream.DialTimeout)
@@ -70,7 +69,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		Upstream: upstreamClient,
 		Metrics:  recorder,
 		Logger:   logger,
-		Version:  version,
+		Version:  buildinfo.Version,
+		Commit:   buildinfo.Commit,
 	})
 	defer func() {
 		if err := svc.Close(); err != nil {

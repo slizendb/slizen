@@ -29,7 +29,46 @@ jobs:
         run: |
           make check
           git diff --exit-code
-      - name: Valkey smoke
+
+  release-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Download modules
+        run: go mod download
+      - name: Release check
+        run: make release-check
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 2s
+          --health-timeout 1s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Download modules
+        run: go mod download
+      - name: Real Valkey integration tests
+        run: |
+          SLIZEN_INTEGRATION=1 \
+          SLIZEN_INTEGRATION_ORIGIN=127.0.0.1:6379 \
+            go test ./...
+      - name: Benchmark against Valkey service
         run: |
           SLIZEN_UPSTREAM_ADDRESS=127.0.0.1:6379 \
           SLIZEN_PROXY_LISTEN=127.0.0.1:6380 \
@@ -47,16 +86,34 @@ jobs:
           done
           curl -fsS http://127.0.0.1:9090/readyz
 
-          go run ./cmd/slizenctl demo black-friday \
-            --redis 127.0.0.1:6380 \
+          go run ./cmd/slizenctl benchmark hotkey \
+            --proxy 127.0.0.1:6380 \
+            --origin 127.0.0.1:6379 \
             --admin http://127.0.0.1:9090 \
             --key product:iphone_17 \
-            --workers 4 \
-            --duration 3s
+            --warmup 3s \
+            --duration 3s \
+            --concurrency 8 \
+            --requests 5000 \
+            --output json \
+            --json-file /tmp/slizen-benchmark-result.json
+          test -s /tmp/slizen-benchmark-result.json
+      - name: Docker Compose smoke and report
+        run: |
+          SLIZEN_VALKEY_PORT=16379 \
+          SLIZEN_PROXY_PORT=16380 \
+          SLIZEN_ADMIN_PORT=19090 \
+          ADMIN_URL=http://127.0.0.1:19090 \
+            make smoke
 
-  docker-smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Docker Compose smoke
-        run: make smoke
+          SLIZEN_VALKEY_PORT=16379 \
+          SLIZEN_PROXY_PORT=16380 \
+          SLIZEN_ADMIN_PORT=19090 \
+          ADMIN_URL=http://127.0.0.1:19090 \
+          PROXY_ADDR=127.0.0.1:16380 \
+          ORIGIN_ADDR=127.0.0.1:16379 \
+          BENCHMARK_WARMUP=3s \
+          BENCHMARK_DURATION=3s \
+          BENCHMARK_CONCURRENCY=8 \
+          BENCHMARK_REQUESTS=5000 \
+            make demo-report

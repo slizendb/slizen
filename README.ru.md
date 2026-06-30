@@ -72,7 +72,20 @@ make demo-down
 - Prometheus metrics;
 - CLI `slizenctl`;
 - Docker Compose demo с Valkey;
-- unit tests, race tests, benchmarks and CI.
+- unit tests, race tests, integration/smoke checks, benchmark and CI.
+
+## Compatibility и benchmark
+
+- [docs/REDIS_COMPATIBILITY.md](docs/REDIS_COMPATIBILITY.md) — какие Redis-команды реально поддержаны, проксируются или отклоняются.
+- [docs/BENCHMARKING.md](docs/BENCHMARKING.md) — как воспроизвести hot-key benchmark и как читать результат.
+
+```sh
+make demo-up
+make benchmark
+make demo-report
+cat ./tmp/demo-report.md
+make demo-down
+```
 
 ## Честные ограничения
 
@@ -108,8 +121,14 @@ go test ./...
 go test -race ./...
 go build ./...
 make check
+make release-check
 make smoke
 ```
+
+Release материалы:
+
+- [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
+- [docs/RELEASE_NOTES_v0.1.md](docs/RELEASE_NOTES_v0.1.md)
 
 ## Roadmap
 

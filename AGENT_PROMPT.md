@@ -21,8 +21,11 @@ Core promise:
 3. `docs/ROADMAP.md`
 4. `docs/THREAT_MODEL.md`
 5. `docs/BENCHMARK_PLAN.md`
-6. `docs/adr/0001-slizen-is-not-source-of-truth.md`
-7. `docs/adr/0002-observation-mode.md`
+6. `docs/BENCHMARKING.md`
+7. `docs/REDIS_COMPATIBILITY.md`
+8. `docs/RELEASE_CHECKLIST.md`
+9. `docs/adr/0001-slizen-is-not-source-of-truth.md`
+10. `docs/adr/0002-observation-mode.md`
 
 ## Non-Negotiable Boundaries
 
@@ -44,7 +47,8 @@ Core promise:
 4. Run `go fmt ./...`, `go vet ./...`, `go test ./...`, `go test -race ./...`, and `go build ./...`.
 5. Add or update tests.
 6. Update documentation for user-visible changes.
-7. Call out unresolved risks honestly.
+7. Run `make release-check` before release-oriented changes.
+8. Call out unresolved risks honestly.
 
 ## Next Useful Milestones
 

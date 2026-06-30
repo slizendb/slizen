@@ -32,6 +32,7 @@ type Options struct {
 	Logger   *slog.Logger
 	Clock    Clock
 	Version  string
+	Commit   string
 }
 
 type Service struct {
@@ -44,6 +45,7 @@ type Service struct {
 	clock    Clock
 	started  time.Time
 	version  string
+	commit   string
 
 	proxyActive atomic.Bool
 	closed      atomic.Bool
@@ -51,22 +53,32 @@ type Service struct {
 }
 
 type Status struct {
-	Version           string `json:"version"`
-	Mode              string `json:"mode"`
-	KeyVisibility     string `json:"key_visibility"`
-	Uptime            string `json:"uptime"`
-	UpstreamStatus    string `json:"upstream_status"`
-	CacheBytes        int64  `json:"cache_bytes"`
-	CacheEntries      int    `json:"cache_entries"`
-	TrackedKeys       int    `json:"tracked_keys"`
-	HotKeys           int    `json:"hot_keys"`
-	TotalRequests     uint64 `json:"total_requests"`
-	CacheHits         uint64 `json:"cache_hits"`
-	CacheMisses       uint64 `json:"cache_misses"`
-	UpstreamRequests  uint64 `json:"upstream_requests"`
-	Promotions        uint64 `json:"promotions"`
-	Demotions         uint64 `json:"demotions"`
-	CoalescedRequests uint64 `json:"coalesced_requests"`
+	Version                string `json:"version"`
+	Commit                 string `json:"commit,omitempty"`
+	Mode                   string `json:"mode"`
+	KeyVisibility          string `json:"key_visibility"`
+	Uptime                 string `json:"uptime"`
+	UpstreamStatus         string `json:"upstream_status"`
+	CacheBytes             int64  `json:"cache_bytes"`
+	CacheEntries           int    `json:"cache_entries"`
+	TrackedKeys            int    `json:"tracked_keys"`
+	HotKeys                int    `json:"hot_keys"`
+	TotalRequests          uint64 `json:"total_requests"`
+	CacheHits              uint64 `json:"cache_hits"`
+	CacheMisses            uint64 `json:"cache_misses"`
+	UpstreamRequests       uint64 `json:"upstream_requests"`
+	RequestsTotal          uint64 `json:"requests_total"`
+	CacheHitsTotal         uint64 `json:"cache_hits_total"`
+	CacheMissesTotal       uint64 `json:"cache_misses_total"`
+	UpstreamRequestsTotal  uint64 `json:"upstream_requests_total"`
+	UpstreamGetsTotal      uint64 `json:"upstream_gets_total"`
+	InvalidationsTotal     uint64 `json:"invalidations_total"`
+	PromotionsTotal        uint64 `json:"promotions_total"`
+	DemotionsTotal         uint64 `json:"demotions_total"`
+	CoalescedRequestsTotal uint64 `json:"coalesced_requests_total"`
+	Promotions             uint64 `json:"promotions"`
+	Demotions              uint64 `json:"demotions"`
+	CoalescedRequests      uint64 `json:"coalesced_requests"`
 }
 
 type HotKey struct {
@@ -116,6 +128,10 @@ func New(opts Options) *Service {
 	if version == "" {
 		version = "dev"
 	}
+	commit := opts.Commit
+	if commit == "" {
+		commit = "unknown"
+	}
 
 	return &Service{
 		cfg:      opts.Config,
@@ -127,6 +143,7 @@ func New(opts Options) *Service {
 		clock:    clock,
 		started:  clock.Now(),
 		version:  version,
+		commit:   commit,
 	}
 }
 
@@ -323,22 +340,32 @@ func (s *Service) Status(ctx context.Context) Status {
 	}
 
 	return Status{
-		Version:           s.version,
-		Mode:              s.cfg.Mode,
-		KeyVisibility:     config.EffectiveKeyVisibility(s.cfg),
-		Uptime:            s.clock.Now().Sub(s.started).Round(time.Second).String(),
-		UpstreamStatus:    upstreamStatus,
-		CacheBytes:        cacheStats.Bytes,
-		CacheEntries:      cacheStats.Entries,
-		TrackedKeys:       tracked,
-		HotKeys:           hot,
-		TotalRequests:     snap.TotalRequests,
-		CacheHits:         snap.CacheHits,
-		CacheMisses:       snap.CacheMisses,
-		UpstreamRequests:  snap.UpstreamRequests,
-		Promotions:        snap.Promotions,
-		Demotions:         snap.Demotions,
-		CoalescedRequests: snap.CoalescedRequests,
+		Version:                s.version,
+		Commit:                 s.commit,
+		Mode:                   s.cfg.Mode,
+		KeyVisibility:          config.EffectiveKeyVisibility(s.cfg),
+		Uptime:                 s.clock.Now().Sub(s.started).Round(time.Second).String(),
+		UpstreamStatus:         upstreamStatus,
+		CacheBytes:             cacheStats.Bytes,
+		CacheEntries:           cacheStats.Entries,
+		TrackedKeys:            tracked,
+		HotKeys:                hot,
+		TotalRequests:          snap.TotalRequests,
+		CacheHits:              snap.CacheHits,
+		CacheMisses:            snap.CacheMisses,
+		UpstreamRequests:       snap.UpstreamRequests,
+		RequestsTotal:          snap.TotalRequests,
+		CacheHitsTotal:         snap.CacheHits,
+		CacheMissesTotal:       snap.CacheMisses,
+		UpstreamRequestsTotal:  snap.UpstreamRequests,
+		UpstreamGetsTotal:      snap.UpstreamGets,
+		InvalidationsTotal:     snap.Invalidations,
+		PromotionsTotal:        snap.Promotions,
+		DemotionsTotal:         snap.Demotions,
+		CoalescedRequestsTotal: snap.CoalescedRequests,
+		Promotions:             snap.Promotions,
+		Demotions:              snap.Demotions,
+		CoalescedRequests:      snap.CoalescedRequests,
 	}
 }
 

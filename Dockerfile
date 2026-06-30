@@ -4,8 +4,10 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/slizend ./cmd/slizend
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/slizenctl ./cmd/slizenctl
+ARG VERSION=dev
+ARG COMMIT=unknown
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/slizendb/slizen/internal/buildinfo.Version=${VERSION} -X github.com/slizendb/slizen/internal/buildinfo.Commit=${COMMIT}" -o /out/slizend ./cmd/slizend
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/slizendb/slizen/internal/buildinfo.Version=${VERSION} -X github.com/slizendb/slizen/internal/buildinfo.Commit=${COMMIT}" -o /out/slizenctl ./cmd/slizenctl
 
 FROM gcr.io/distroless/static-debian12:nonroot
 

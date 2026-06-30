@@ -3,7 +3,7 @@ services:
     image: valkey/valkey:8-alpine
     command: ["valkey-server", "--appendonly", "no"]
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:${SLIZEN_VALKEY_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 2s
@@ -11,7 +11,11 @@ services:
       retries: 30
 
   slizend:
-    build: .
+    build:
+      context: .
+      args:
+        VERSION: ${SLIZEN_VERSION:-dev}
+        COMMIT: ${SLIZEN_COMMIT:-unknown}
     environment:
       SLIZEN_MODE: cache
       SLIZEN_PROXY_LISTEN: 0.0.0.0:6380
@@ -20,8 +24,8 @@ services:
       SLIZEN_KEY_HASH_SECRET: demo-secret
       SLIZEN_LOG_LEVEL: info
     ports:
-      - "127.0.0.1:6380:6380"
-      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:${SLIZEN_PROXY_PORT:-6380}:6380"
+      - "127.0.0.1:${SLIZEN_ADMIN_PORT:-9090}:9090"
     depends_on:
       valkey:
         condition: service_healthy
