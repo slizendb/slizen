@@ -13,6 +13,7 @@ import (
 )
 
 type Config struct {
+	Mode     string         `toml:"mode"`
 	Proxy    ProxyConfig    `toml:"proxy"`
 	Admin    AdminConfig    `toml:"admin"`
 	Upstream UpstreamConfig `toml:"upstream"`
@@ -75,6 +76,7 @@ type LoggingConfig struct {
 // Default returns the documented v0.1 defaults.
 func Default() Config {
 	return Config{
+		Mode: "cache",
 		Proxy: ProxyConfig{
 			Listen:          "0.0.0.0:6380",
 			ReadTimeout:     3 * time.Second,
@@ -146,6 +148,7 @@ func Load(path string) (Config, error) {
 }
 
 type rawConfig struct {
+	Mode     *string     `toml:"mode"`
 	Proxy    rawProxy    `toml:"proxy"`
 	Admin    rawAdmin    `toml:"admin"`
 	Upstream rawUpstream `toml:"upstream"`
@@ -206,6 +209,9 @@ type rawLogging struct {
 }
 
 func applyRaw(cfg *Config, raw rawConfig) error {
+	if raw.Mode != nil {
+		cfg.Mode = *raw.Mode
+	}
 	if raw.Proxy.Listen != nil {
 		cfg.Proxy.Listen = *raw.Proxy.Listen
 	}
@@ -326,6 +332,7 @@ func applyEnv(cfg *Config) error {
 	}
 
 	setString("SLIZEN_PROXY_LISTEN", &cfg.Proxy.Listen)
+	setString("SLIZEN_MODE", &cfg.Mode)
 	setString("SLIZEN_ADMIN_LISTEN", &cfg.Admin.Listen)
 	if err := setBool("SLIZEN_ADMIN_EXPOSE_RAW_KEYS", &cfg.Admin.ExposeRawKeys); err != nil {
 		return err
@@ -354,6 +361,12 @@ func Validate(cfg Config) error {
 	checkAddress("proxy.listen", cfg.Proxy.Listen)
 	checkAddress("admin.listen", cfg.Admin.Listen)
 	checkAddress("upstream.address", cfg.Upstream.Address)
+
+	switch cfg.Mode {
+	case "cache", "observe":
+	default:
+		errs = append(errs, errors.New("mode must be cache or observe"))
+	}
 
 	positiveDuration := func(name string, d time.Duration) {
 		if d <= 0 {
@@ -416,6 +429,7 @@ func Validate(cfg Config) error {
 // RedactedSummary returns values safe for startup logs.
 func RedactedSummary(cfg Config) map[string]any {
 	return map[string]any{
+		"mode":              cfg.Mode,
 		"proxy_listen":      cfg.Proxy.Listen,
 		"admin_listen":      cfg.Admin.Listen,
 		"upstream_address":  cfg.Upstream.Address,

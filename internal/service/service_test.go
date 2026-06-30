@@ -80,6 +80,72 @@ func TestGETMissThenPromotedHit(t *testing.T) {
 	}
 }
 
+func TestObserveModeNeverUsesLocalCache(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	up := testutil.NewFakeUpstream()
+	up.Put("k", []byte("value"), 0)
+	svc := newTestServiceWithConfig(up, clock, func(cfg *config.Config) {
+		cfg.Mode = "observe"
+	})
+
+	promoteAndCache(t, svc, clock, "k")
+	if stats := svc.cache.Stats(); stats.Entries != 0 {
+		t.Fatalf("observe mode should not store cache entries: %+v", stats)
+	}
+
+	got, err := svc.Get(context.Background(), "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Exists || string(got.Data) != "value" {
+		t.Fatalf("unexpected value: %+v", got)
+	}
+	if calls := up.GetCallCount("k"); calls != 3 {
+		t.Fatalf("observe mode should forward every GET, got %d upstream calls", calls)
+	}
+	status := svc.Status(context.Background())
+	if status.Mode != "observe" {
+		t.Fatalf("status mode = %q", status.Mode)
+	}
+	if status.CacheHits != 0 {
+		t.Fatalf("observe mode should not record cache hits: %+v", status)
+	}
+}
+
+func TestObserveModeDoesNotCoalesceGETs(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	up := testutil.NewFakeUpstream()
+	up.Put("k", []byte("value"), 0)
+	up.SetDelay(50 * time.Millisecond)
+	svc := newTestServiceWithConfig(up, clock, func(cfg *config.Config) {
+		cfg.Mode = "observe"
+	})
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < 25; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			value, err := svc.Get(context.Background(), "k")
+			if err != nil {
+				t.Errorf("get failed: %v", err)
+				return
+			}
+			if !value.Exists || string(value.Data) != "value" {
+				t.Errorf("bad value: %+v", value)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if calls := up.GetCallCount("k"); calls != 25 {
+		t.Fatalf("observe mode should forward every GET, got %d upstream calls", calls)
+	}
+}
+
 func TestMGETMixedLocalHitsAndUpstreamMisses(t *testing.T) {
 	clock := testutil.NewFakeClock(time.Unix(0, 0))
 	up := testutil.NewFakeUpstream()

@@ -1,6 +1,6 @@
 # Slizen Project Rules
 
-Slizen is a self-hosted adaptive cache mesh for Redis and Valkey. Version 0.1 is a single-node Redis-compatible read proxy with a bounded local cache, hot-key detection, request coalescing, metrics, an admin API, CLI tooling, and a reproducible Black Friday hot-key demo.
+Slizen is a self-hosted adaptive cache mesh for Redis and Valkey. Version 0.1 is a single-node Redis-compatible read proxy with explicit `observe` and `cache` modes, a bounded local cache, hot-key detection, request coalescing, metrics, an admin API, CLI tooling, and a reproducible Black Friday hot-key demo.
 
 ## Product Boundaries
 
@@ -8,6 +8,7 @@ Slizen is a self-hosted adaptive cache mesh for Redis and Valkey. Version 0.1 is
 - Slizen is not a durable database, PostgreSQL replacement, Redis Cluster replacement, consensus system, transactional store, source of truth, fully Redis-compatible server, or distributed mesh in v0.1.
 - The cache and hotness state are disposable and may be lost on restart.
 - Writes are safest when they pass through Slizen. Direct upstream writes may remain stale until local TTL expiration.
+- In `observe` mode, Slizen must forward reads and collect telemetry without serving or storing local cached values.
 
 ## Engineering Rules
 

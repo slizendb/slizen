@@ -15,7 +15,9 @@ flowchart LR
 
 ## Request flow
 
-GET records a hotness observation, checks the local cache, coalesces concurrent misses with `singleflight`, fetches from upstream on miss, and stores the value locally only after the key is eligible for promotion. MGET preserves input order, uses local hits where possible, and fetches remaining keys from upstream in a batch.
+GET records a hotness observation, checks the local cache in `cache` mode, coalesces concurrent misses with `singleflight`, fetches from upstream on miss, and stores the value locally only after the key is eligible for promotion. MGET preserves input order, uses local hits where possible in `cache` mode, and fetches remaining keys from upstream in a batch.
+
+In `observe` mode, Slizen still records hotness and forwards reads to upstream, but it never serves local cache hits, never coalesces `GET` requests, and never stores values locally. This mode is intended for safe heat discovery before enabling adaptive caching.
 
 Write commands are sent upstream first. Slizen invalidates local entries only after upstream accepts the write, so it never acknowledges a write that Redis or Valkey rejected.
 
@@ -39,5 +41,7 @@ The daemon exposes:
 
 - RESP proxy listener, default `0.0.0.0:6380`.
 - HTTP admin listener, default `127.0.0.1:9090`.
+
+The active mode is exposed in `/v1/status`.
 
 The admin listener is unauthenticated in v0.1 and must not be exposed publicly.

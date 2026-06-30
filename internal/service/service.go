@@ -52,6 +52,7 @@ type Service struct {
 
 type Status struct {
 	Version           string `json:"version"`
+	Mode              string `json:"mode"`
 	Uptime            string `json:"uptime"`
 	UpstreamStatus    string `json:"upstream_status"`
 	CacheBytes        int64  `json:"cache_bytes"`
@@ -153,27 +154,33 @@ func (s *Service) Get(ctx context.Context, key string) (upstream.Value, error) {
 	}
 	s.handleTransitions(s.tracker.Observe(key))
 
-	if item, ok := s.getFreshCached(key); ok {
-		s.metrics.CacheHit("GET")
-		s.observeCache()
-		return upstream.Value{Exists: true, Data: item.Value, PTTL: item.TTL}, nil
+	if s.cacheEnabled() {
+		if item, ok := s.getFreshCached(key); ok {
+			s.metrics.CacheHit("GET")
+			s.observeCache()
+			return upstream.Value{Exists: true, Data: item.Value, PTTL: item.TTL}, nil
+		}
 	}
 	s.metrics.CacheMiss("GET")
 
+	if !s.cacheEnabled() {
+		value, err := s.fetchUpstreamGet(ctx, key)
+		s.observeCache()
+		return value, err
+	}
+
 	valueAny, err, shared := s.group.Do(key, func() (any, error) {
-		upCtx, cancel := s.upstreamContext(ctx)
-		defer cancel()
-		start := s.clock.Now()
-		value, getErr := s.upstream.Get(upCtx, key)
-		s.metrics.ObserveUpstream("GET", s.clock.Now().Sub(start), getErr)
+		value, getErr := s.fetchUpstreamGet(ctx, key)
 		if getErr != nil {
 			return upstream.Value{}, getErr
 		}
 		if !value.Exists {
-			s.cache.Delete(key)
+			if s.cacheEnabled() {
+				s.cache.Delete(key)
+			}
 			return value, nil
 		}
-		if s.tracker.IsHot(key) {
+		if s.cacheEnabled() && s.tracker.IsHot(key) {
 			s.storeLocal(key, value)
 		}
 		return value, nil
@@ -182,7 +189,7 @@ func (s *Service) Get(ctx context.Context, key string) (upstream.Value, error) {
 		s.metrics.Coalesced()
 	}
 	if err != nil {
-		if s.cfg.Cache.AllowStaleOnUpstreamError {
+		if s.cacheEnabled() && s.cfg.Cache.AllowStaleOnUpstreamError {
 			if item, ok := s.cache.GetStale(key, s.cfg.Cache.StaleGrace); ok {
 				return upstream.Value{Exists: true, Data: item.Value, PTTL: item.TTL}, nil
 			}
@@ -191,6 +198,15 @@ func (s *Service) Get(ctx context.Context, key string) (upstream.Value, error) {
 	}
 	s.observeCache()
 	return valueAny.(upstream.Value), nil
+}
+
+func (s *Service) fetchUpstreamGet(ctx context.Context, key string) (upstream.Value, error) {
+	upCtx, cancel := s.upstreamContext(ctx)
+	defer cancel()
+	start := s.clock.Now()
+	value, err := s.upstream.Get(upCtx, key)
+	s.metrics.ObserveUpstream("GET", s.clock.Now().Sub(start), err)
+	return value, err
 }
 
 func (s *Service) MGet(ctx context.Context, keys []string) ([]upstream.Value, error) {
@@ -203,10 +219,12 @@ func (s *Service) MGet(ctx context.Context, keys []string) ([]upstream.Value, er
 	missingPositions := make([]int, 0, len(keys))
 	for i, key := range keys {
 		s.handleTransitions(s.tracker.Observe(key))
-		if item, ok := s.getFreshCached(key); ok {
-			s.metrics.CacheHit("MGET")
-			out[i] = upstream.Value{Exists: true, Data: item.Value, PTTL: item.TTL}
-			continue
+		if s.cacheEnabled() {
+			if item, ok := s.getFreshCached(key); ok {
+				s.metrics.CacheHit("MGET")
+				out[i] = upstream.Value{Exists: true, Data: item.Value, PTTL: item.TTL}
+				continue
+			}
 		}
 		s.metrics.CacheMiss("MGET")
 		missingKeys = append(missingKeys, key)
@@ -224,7 +242,7 @@ func (s *Service) MGet(ctx context.Context, keys []string) ([]upstream.Value, er
 	values, err := s.upstream.MGet(upCtx, missingKeys)
 	s.metrics.ObserveUpstream("MGET", s.clock.Now().Sub(start), err)
 	if err != nil {
-		if s.cfg.Cache.AllowStaleOnUpstreamError {
+		if s.cacheEnabled() && s.cfg.Cache.AllowStaleOnUpstreamError {
 			staleCount := 0
 			for i, key := range missingKeys {
 				pos := missingPositions[i]
@@ -244,10 +262,12 @@ func (s *Service) MGet(ctx context.Context, keys []string) ([]upstream.Value, er
 		pos := missingPositions[i]
 		out[pos] = value
 		if !value.Exists {
-			s.cache.Delete(key)
+			if s.cacheEnabled() {
+				s.cache.Delete(key)
+			}
 			continue
 		}
-		if s.tracker.IsHot(key) {
+		if s.cacheEnabled() && s.tracker.IsHot(key) {
 			s.storeLocal(key, value)
 		}
 	}
@@ -303,6 +323,7 @@ func (s *Service) Status(ctx context.Context) Status {
 
 	return Status{
 		Version:           s.version,
+		Mode:              s.cfg.Mode,
 		Uptime:            s.clock.Now().Sub(s.started).Round(time.Second).String(),
 		UpstreamStatus:    upstreamStatus,
 		CacheBytes:        cacheStats.Bytes,
@@ -371,6 +392,10 @@ func (s *Service) getFreshCached(key string) (cache.EntrySnapshot, bool) {
 		return s.cache.GetStale(key, 0)
 	}
 	return s.cache.Get(key)
+}
+
+func (s *Service) cacheEnabled() bool {
+	return s.cfg.Mode == "cache"
 }
 
 func (s *Service) storeLocal(key string, value upstream.Value) {

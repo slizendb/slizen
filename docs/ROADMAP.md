@@ -4,6 +4,7 @@ Slizen replicates hot objects before they burn your database. Redis or Valkey re
 
 ## v0.1: Single-node adaptive read proxy
 
+- Explicit `cache` and `observe` operating modes.
 - Redis-compatible RESP proxy for selected read and write commands.
 - Bounded local RAM cache with per-entry expiration and LRU-style eviction.
 - Hot-key detection with promotion hysteresis and cooling.
@@ -13,6 +14,9 @@ Slizen replicates hot objects before they burn your database. Redis or Valkey re
 
 ## v0.2: Static multi-node cache mesh
 
+- Privacy-aware key identity modes.
+- Per-prefix cache policy.
+- Reproducible benchmark harness with skewed workloads.
 - Multiple Slizen nodes.
 - Static membership.
 - Node heartbeats.

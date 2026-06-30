@@ -71,6 +71,7 @@ format = "text"
 }
 
 func TestEnvironmentOverrides(t *testing.T) {
+	t.Setenv("SLIZEN_MODE", "observe")
 	t.Setenv("SLIZEN_UPSTREAM_ADDRESS", "redis.internal:6379")
 	t.Setenv("SLIZEN_UPSTREAM_USERNAME", "user")
 	t.Setenv("SLIZEN_UPSTREAM_PASSWORD", "secret")
@@ -83,11 +84,22 @@ func TestEnvironmentOverrides(t *testing.T) {
 	if cfg.Upstream.Address != "redis.internal:6379" {
 		t.Fatalf("address override not applied: %s", cfg.Upstream.Address)
 	}
+	if cfg.Mode != "observe" {
+		t.Fatalf("mode override not applied: %s", cfg.Mode)
+	}
 	if cfg.Upstream.Username != "user" || cfg.Upstream.Password != "secret" {
 		t.Fatal("credential override not applied")
 	}
 	if cfg.Logging.Level != "warn" {
 		t.Fatalf("log level override not applied: %s", cfg.Logging.Level)
+	}
+}
+
+func TestValidationRejectsBadMode(t *testing.T) {
+	cfg := Default()
+	cfg.Mode = "mirror"
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected validation error")
 	}
 }
 

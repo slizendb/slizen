@@ -31,6 +31,16 @@ redis-cli -p 6380 GET product:iphone_17
 go run ./cmd/slizenctl status --admin http://127.0.0.1:9090
 ```
 
+## Operating Modes
+
+Slizen starts in `cache` mode by default:
+
+```toml
+mode = "cache"
+```
+
+Set `mode = "observe"` or `SLIZEN_MODE=observe` to run Slizen as an observation-only proxy. In observe mode, Slizen still forwards commands, records bounded hot-key telemetry, updates `/v1/status`, `/v1/hotkeys`, and Prometheus metrics, but never serves local cache hits, never coalesces `GET` requests, and never stores values in the local cache. This is the safest first staging deployment mode when you want to understand key heat before allowing adaptive local caching.
+
 ## Docker Compose Demo
 
 ```sh
@@ -57,8 +67,8 @@ The Compose stack exposes Valkey directly on `127.0.0.1:6379`, Slizen RESP on `1
 
 | Command | Behavior |
 | --- | --- |
-| `GET` | Cache-aware read, hotness observation, singleflight miss coalescing. |
-| `MGET` | Ordered multi-key read with local hits and batched upstream misses. |
+| `GET` | Cache-aware read in `cache` mode; observation and upstream forwarding only in `observe` mode. |
+| `MGET` | Ordered multi-key read with local hits in `cache` mode; upstream forwarding only in `observe` mode. |
 | `SET` | Write-through to upstream, then local invalidation. |
 | `SETEX` | Write-through to upstream, then local invalidation. |
 | `PSETEX` | Write-through to upstream, then local invalidation. |
@@ -82,7 +92,7 @@ Slizen does not claim complete Redis compatibility.
 
 Redis or Valkey remains authoritative. Slizen is safe when writes pass through Slizen because accepted writes invalidate affected local entries. Direct writes to the upstream may remain stale until local TTL expiration.
 
-The cache is disposable. Restarting Slizen may lose cached values and hotness state. During upstream outages, stale reads are disabled by default; enabling them requires `cache.allow_stale_on_upstream_error = true`.
+The cache is disposable. Restarting Slizen may lose cached values and hotness state. During upstream outages, stale reads are disabled by default; enabling them requires `cache.allow_stale_on_upstream_error = true`. In `observe` mode, Slizen does not read from or write to the local cache at all.
 
 ## Security Notes
 
@@ -101,7 +111,7 @@ curl http://127.0.0.1:9090/v1/cache
 curl http://127.0.0.1:9090/metrics
 ```
 
-Prometheus metrics include request counts and latency, cache hits and misses, cache bytes and entries, evictions, upstream requests and errors, hot-key count, promotions, demotions, invalidations, and coalesced requests. Redis keys are never used as labels.
+`/v1/status` includes the active mode. Prometheus metrics include request counts and latency, cache hits and misses, cache bytes and entries, evictions, upstream requests and errors, hot-key count, promotions, demotions, invalidations, and coalesced requests. Redis keys are never used as labels.
 
 ## Cache Administration
 
@@ -150,6 +160,7 @@ docker compose down
 - Slizen does not yet replicate values between Slizen nodes.
 - Direct upstream writes may remain stale until local TTL expiration.
 - Slizen is not fully Redis-compatible.
+- `observe` mode is intended for safe heat discovery and does not reduce upstream read load.
 - Negative caching is disabled by default.
 - Admin API authentication is not built in.
 - Production use requires careful workload testing.

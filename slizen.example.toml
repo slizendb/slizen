@@ -1,3 +1,5 @@
+mode = "cache"
+
 [proxy]
 listen = "0.0.0.0:6380"
 read_timeout = "3s"
