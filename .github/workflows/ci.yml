@@ -25,18 +25,10 @@ jobs:
           cache: true
       - name: Download modules
         run: go mod download
-      - name: Check formatting
+      - name: Check
         run: |
-          gofmt -w .
+          make check
           git diff --exit-code
-      - name: Vet
-        run: go vet ./...
-      - name: Test
-        run: go test ./...
-      - name: Race
-        run: go test -race ./...
-      - name: Build
-        run: go build ./...
       - name: Valkey smoke
         run: |
           SLIZEN_UPSTREAM_ADDRESS=127.0.0.1:6379 \
@@ -61,3 +53,10 @@ jobs:
             --key product:iphone_17 \
             --workers 4 \
             --duration 3s
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker Compose smoke
+        run: make smoke

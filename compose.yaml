@@ -13,8 +13,11 @@ services:
   slizend:
     build: .
     environment:
+      SLIZEN_MODE: cache
+      SLIZEN_PROXY_LISTEN: 0.0.0.0:6380
       SLIZEN_UPSTREAM_ADDRESS: valkey:6379
       SLIZEN_ADMIN_LISTEN: 0.0.0.0:9090
+      SLIZEN_KEY_HASH_SECRET: demo-secret
       SLIZEN_LOG_LEVEL: info
     ports:
       - "127.0.0.1:6380:6380"
@@ -23,7 +26,7 @@ services:
       valkey:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "/usr/local/bin/slizenctl", "status", "--admin", "http://127.0.0.1:9090"]
-      interval: 5s
+      test: ["CMD", "/usr/local/bin/slizenctl", "readyz", "--admin", "http://127.0.0.1:9090"]
+      interval: 2s
       timeout: 2s
-      retries: 12
+      retries: 30

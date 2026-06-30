@@ -34,6 +34,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return errors.New("missing command")
 	}
 	switch args[0] {
+	case "healthz":
+		return textEndpointCmd(args[1:], stdout, stderr, "/healthz")
+	case "readyz":
+		return textEndpointCmd(args[1:], stdout, stderr, "/readyz")
 	case "status":
 		return statusCmd(args[1:], stdout, stderr)
 	case "hotkeys":
@@ -46,6 +50,21 @@ func run(args []string, stdout, stderr io.Writer) error {
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func textEndpointCmd(args []string, stdout, stderr io.Writer, endpoint string) error {
+	fs := flag.NewFlagSet(strings.TrimPrefix(endpoint, "/"), flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	adminURL := fs.String("admin", defaultAdmin, "admin API URL")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	body, err := httpGetText(strings.TrimRight(*adminURL, "/") + endpoint)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprint(stdout, body)
+	return err
 }
 
 func statusCmd(args []string, stdout, stderr io.Writer) error {
@@ -184,6 +203,23 @@ func runBlackFridayDemo(stdout io.Writer, redisAddr, adminURL, key string, worke
 	}
 }
 
+func httpGetText(url string) (string, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("GET %s returned %s", url, resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
 func httpGet(url string) (any, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
@@ -286,5 +322,5 @@ func hitRatio(status map[string]any) float64 {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: slizenctl status|hotkeys|cache|demo")
+	fmt.Fprintln(w, "usage: slizenctl healthz|readyz|status|hotkeys|cache|demo")
 }

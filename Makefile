@@ -1,4 +1,4 @@
-.PHONY: fmt vet test race build demo docker-up docker-down
+.PHONY: fmt vet test race build check demo-up demo demo-down smoke docker-up docker-down docker-compose-up docker-compose-down
 
 fmt:
 	go fmt ./...
@@ -15,11 +15,26 @@ race:
 build:
 	go build ./...
 
+check: fmt vet test race build
+
+demo-up:
+	docker compose up --build -d
+
 demo:
 	./scripts/demo.sh
 
-docker-up:
+demo-down:
+	docker compose down --remove-orphans
+
+smoke:
+	./scripts/smoke.sh
+
+docker-up: demo-up
+
+docker-down: demo-down
+
+docker-compose-up:
 	docker compose up --build -d
 
-docker-down:
+docker-compose-down:
 	docker compose down

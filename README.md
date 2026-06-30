@@ -44,18 +44,15 @@ Set `mode = "observe"` or `SLIZEN_MODE=observe` to run Slizen as an observation-
 ## Docker Compose Demo
 
 ```sh
-docker compose up --build -d
+make demo-up
 redis-cli -p 6380 SET product:iphone_17 '{"name":"iPhone 17","price":999}'
 redis-cli -p 6380 GET product:iphone_17
-go run ./cmd/slizenctl demo black-friday \
-  --redis 127.0.0.1:6380 \
-  --admin http://127.0.0.1:9090 \
-  --key product:iphone_17 \
-  --workers 100 \
-  --duration 20s
+make demo
+curl http://127.0.0.1:9090/v1/status
+make demo-down
 ```
 
-Or run:
+`make demo` also starts the stack if it is not already running, verifies `/healthz`, `/readyz`, `/v1/status`, `/metrics`, writes and reads a test key through Slizen, runs a short Black Friday demo, and leaves the stack running for inspection.
 
 ```sh
 ./scripts/demo.sh
@@ -144,13 +141,16 @@ go vet ./...
 go test ./...
 go test -race ./...
 go build ./...
+make check
 ```
 
 Docker:
 
 ```sh
-docker compose up --build -d
-docker compose down
+make demo-up
+make demo
+make smoke
+make demo-down
 ```
 
 ## Limitations
