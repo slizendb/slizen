@@ -364,6 +364,7 @@ func signalProcess(cmd *exec.Cmd, sig syscall.Signal) {
 
 func warmUntilCached(t *testing.T, env slizenEnv, key string) {
 	t.Helper()
+	purgeCache(t, env.adminURL)
 	waitUntil(t, 5*time.Second, func() bool {
 		if _, err := env.proxy.Get(context.Background(), key).Result(); err != nil {
 			t.Fatalf("warm GET failed: %v", err)
@@ -371,6 +372,18 @@ func warmUntilCached(t *testing.T, env slizenEnv, key string) {
 		status := getStatus(t, env.adminURL)
 		return status.CacheEntries > 0 && status.HotKeys > 0
 	})
+}
+
+func purgeCache(t *testing.T, adminURL string) {
+	t.Helper()
+	resp, err := http.Post(adminURL+"/v1/cache/purge", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("cache purge returned %s", resp.Status)
+	}
 }
 
 func requireInvalidation(t *testing.T, before, after integrationStatus, command string) {
