@@ -43,6 +43,19 @@ jobs:
       - name: Release check
         run: make release-check
 
+  vulnerability-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Download modules
+        run: go mod download
+      - name: govulncheck
+        run: make vulncheck
+
   integration:
     runs-on: ubuntu-latest
     services:

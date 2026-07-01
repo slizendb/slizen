@@ -7,6 +7,7 @@ Slizen is intentionally narrow. Before adding a feature, explain which measured 
 ```sh
 make check
 make release-check
+make vulncheck
 ```
 
 For individual steps:
@@ -17,6 +18,7 @@ make vet
 make test
 make race
 make build
+make vulncheck
 ```
 
 ## Style Expectations
