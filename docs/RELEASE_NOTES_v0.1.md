@@ -16,7 +16,7 @@ Slizen v0.1.0 is a developer preview of a single-node adaptive cache proxy for R
 ## Quick start
 
 ```sh
-git clone https://github.com/slizendb/slizen.git
+git clone https://github.com/gazakov/slizen.git
 cd slizen
 make demo-up
 make demo

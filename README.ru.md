@@ -1,6 +1,6 @@
 # Slizen
 
-[![CI](https://github.com/slizendb/slizen/actions/workflows/ci.yml/badge.svg)](https://github.com/slizendb/slizen/actions/workflows/ci.yml)
+[![CI](https://github.com/gazakov/slizen/actions/workflows/ci.yml/badge.svg)](https://github.com/gazakov/slizen/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 
@@ -24,7 +24,7 @@ Slizen v0.1 — single-node, не source of truth и поддерживает т
 Нужен Docker Compose.
 
 ```sh
-git clone https://github.com/slizendb/slizen.git
+git clone https://github.com/gazakov/slizen.git
 cd slizen
 make demo-up
 make demo
