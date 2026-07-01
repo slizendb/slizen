@@ -301,25 +301,28 @@ format = "json"
 	}
 
 	var logs bytes.Buffer
-	cmd := exec.Command("go", "run", "./cmd/slizend", "--config", cfgPath)
+	slizenBinary := os.Getenv("SLIZEN_INTEGRATION_SLIZEND")
+	var cmd *exec.Cmd
+	if slizenBinary != "" {
+		cmd = exec.Command(slizenBinary, "--config", cfgPath)
+	} else {
+		cmd = exec.Command("go", "run", "./cmd/slizend", "--config", cfgPath)
+	}
 	cmd.Dir = root
 	cmd.Stdout = &logs
 	cmd.Stderr = &logs
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-		}
+		signalProcess(cmd, syscall.SIGTERM)
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
+			signalProcess(cmd, syscall.SIGKILL)
 			<-done
 		}
 		if t.Failed() {
@@ -343,6 +346,20 @@ format = "json"
 	})
 
 	return slizenEnv{proxyAddr: proxyAddr, adminURL: adminURL, proxy: proxy, origin: origin}
+}
+
+func signalProcess(cmd *exec.Cmd, sig syscall.Signal) {
+	if cmd.Process == nil {
+		return
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, sig); err == nil {
+		return
+	}
+	if sig == syscall.SIGKILL {
+		_ = cmd.Process.Kill()
+		return
+	}
+	_ = cmd.Process.Signal(sig)
 }
 
 func warmUntilCached(t *testing.T, env slizenEnv, key string) {

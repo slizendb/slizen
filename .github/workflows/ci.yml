@@ -64,17 +64,21 @@ jobs:
       - name: Download modules
         run: go mod download
       - name: Real Valkey integration tests
+        timeout-minutes: 5
         run: |
+          go build -o /tmp/slizend ./cmd/slizend
           SLIZEN_INTEGRATION=1 \
           SLIZEN_INTEGRATION_ORIGIN=127.0.0.1:6379 \
-            go test ./...
+          SLIZEN_INTEGRATION_SLIZEND=/tmp/slizend \
+            go test ./... -count=1 -timeout 3m
       - name: Benchmark against Valkey service
+        timeout-minutes: 5
         run: |
           SLIZEN_UPSTREAM_ADDRESS=127.0.0.1:6379 \
           SLIZEN_PROXY_LISTEN=127.0.0.1:6380 \
           SLIZEN_ADMIN_LISTEN=127.0.0.1:9090 \
           SLIZEN_LOG_LEVEL=warn \
-            go run ./cmd/slizend > /tmp/slizend.log 2>&1 &
+            /tmp/slizend > /tmp/slizend.log 2>&1 &
           slizend_pid=$!
           trap 'kill "${slizend_pid}" 2>/dev/null || true; wait "${slizend_pid}" 2>/dev/null || true; cat /tmp/slizend.log' EXIT
 
