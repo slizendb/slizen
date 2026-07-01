@@ -98,6 +98,13 @@ jobs:
             --output json \
             --json-file /tmp/slizen-benchmark-result.json
           test -s /tmp/slizen-benchmark-result.json
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: slizen-benchmark-result
+          path: /tmp/slizen-benchmark-result.json
+          if-no-files-found: ignore
       - name: Docker Compose smoke and report
         run: |
           SLIZEN_VALKEY_PORT=16379 \
@@ -117,3 +124,15 @@ jobs:
           BENCHMARK_CONCURRENCY=8 \
           BENCHMARK_REQUESTS=5000 \
             make demo-report
+      - name: Upload demo report artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: slizen-demo-report
+          path: |
+            tmp/slizen-benchmark-result.json
+            tmp/status-before.json
+            tmp/status-after.json
+            tmp/hotkeys.json
+            tmp/demo-report.md
+          if-no-files-found: ignore

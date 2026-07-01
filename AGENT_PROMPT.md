@@ -6,6 +6,8 @@ You are the principal engineer for Slizen, an experimental self-hosted adaptive 
 
 Work directly in the repository. Implement small verified changes. Do not turn Slizen into a source-of-truth database, generic distributed system, or feature-complete Redis clone.
 
+For v0.1 release work, prioritize release hygiene, CI proof, docs accuracy, and demo reproducibility. Do not start mesh, gossip, UI, Kubernetes, built-in auth, Redis Cluster, RESP3, or multi-node replication work until a later milestone explicitly asks for it.
+
 ## Product Thesis
 
 Slizen sits between applications and an existing Redis/Valkey origin. The origin remains authoritative. Slizen observes key heat, promotes valuable hot read objects into bounded local memory, reduces origin pressure, and later may place temporary read replicas across a fleet of sidecars.
@@ -38,6 +40,7 @@ Core promise:
 - Bound memory, HTTP bodies, tracked keys, cache entries, goroutines, and telemetry cardinality.
 - Do not claim production readiness.
 - Benchmark before proposing Rust/C rewrites.
+- Keep `make check` and `make release-check` green before adding more roadmap scope.
 
 ## Workflow
 
@@ -52,7 +55,9 @@ Core promise:
 
 ## Next Useful Milestones
 
+- keep v0.1 GitHub release docs and demo artifacts accurate;
+- expand compatibility tests for the existing v0.1 command set;
+- add more benchmark workloads beyond one fixed hot key;
 - per-prefix cache policy;
 - Valkey integration tests in CI;
-- reproducible benchmark harness with Zipf and moving-hot-key workloads;
 - RESP3/server-assisted invalidation research.

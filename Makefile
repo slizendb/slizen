@@ -2,7 +2,7 @@ VERSION ?= dev
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS := -X github.com/slizendb/slizen/internal/buildinfo.Version=$(VERSION) -X github.com/slizendb/slizen/internal/buildinfo.Commit=$(COMMIT)
 
-.PHONY: fmt vet test race build check release-check benchmark demo-up demo demo-report demo-down smoke docker-up docker-down docker-compose-up docker-compose-down
+.PHONY: fmt vet test race build check release-check local-release-check version benchmark demo-up demo demo-report demo-down smoke docker-up docker-down docker-compose-up docker-compose-down
 
 fmt:
 	go fmt ./...
@@ -23,6 +23,12 @@ check: fmt vet test race build
 
 release-check:
 	./scripts/release_check.sh
+
+local-release-check: release-check
+
+version:
+	@go run -ldflags "$(LDFLAGS)" ./cmd/slizend --version
+	@go run -ldflags "$(LDFLAGS)" ./cmd/slizenctl version
 
 benchmark:
 	go run -ldflags "$(LDFLAGS)" ./cmd/slizenctl benchmark hotkey

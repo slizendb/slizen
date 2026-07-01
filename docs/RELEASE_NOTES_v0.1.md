@@ -2,74 +2,72 @@
 
 Slizen v0.1.0 is a developer preview of a single-node adaptive cache proxy for Redis and Valkey read-heavy workloads.
 
-## What Works
+## What works
 
-- RESP proxy on `:6380`.
-- Admin API and Prometheus metrics on `:9090`.
-- `observe` mode for safe hot-key telemetry without local cache hits.
-- `cache` mode with hot-key promotion, bounded local TTL cache, and request coalescing.
-- Write-driven invalidation when writes pass through Slizen.
-- HMAC key identifiers in `/v1/hotkeys` by default.
+- Redis-compatible RESP proxy for a documented v0.1 command subset.
+- `cache` mode with hot-key detection, bounded local cache, request coalescing, and write-driven invalidation.
+- `observe` mode for safe telemetry without local cache hits or value storage.
+- Admin API with `/healthz`, `/readyz`, `/v1/status`, `/v1/hotkeys`, `/v1/cache`, and Prometheus `/metrics`.
+- HMAC key identifiers in hot-key output by default.
 - Docker Compose demo with Valkey.
-- `slizenctl benchmark hotkey` for reproducible local demo evidence.
+- `slizenctl benchmark hotkey` and `make demo-report` for reproducible local demo evidence.
+- CI coverage for Go tests, race tests, real Valkey integration tests, Docker Compose smoke, and benchmark/demo-report artifacts.
 
-## Intentionally Not Supported
-
-- Mesh, gossip, or distributed replication.
-- Redis Cluster.
-- Pub/Sub.
-- Transactions.
-- Blocking commands.
-- RESP3.
-- Kubernetes integration.
-- Built-in authentication.
-- Durable storage or source-of-truth behavior.
-
-## Quick Start
+## Quick start
 
 ```sh
+git clone https://github.com/slizendb/slizen.git
+cd slizen
 make demo-up
 make demo
 curl http://127.0.0.1:9090/v1/status
 make demo-down
 ```
 
-## Demo Command
+## Demo
 
 ```sh
+make demo-up
 make demo
+make demo-down
 ```
 
-## Benchmark Command
+The demo starts Valkey and Slizen, waits for readiness, writes and reads a test key through the Slizen RESP proxy, runs a short hot-key load, and prints status/hot-key evidence.
+
+## Benchmark
 
 ```sh
 make demo-up
 make benchmark
 make demo-report
+cat ./tmp/demo-report.md
+make demo-down
 ```
 
-The benchmark compares direct origin GETs with Slizen cold and hot reads, then reports cache hit ratio and upstream GET reduction from real `/v1/status` counters.
+The benchmark compares direct origin GETs with Slizen cold and hot reads. It reports cache hit ratio and upstream GET reduction from real `/v1/status` counters. It is local demo evidence, not a scientific production benchmark.
 
-## Safety Notes
+## Safety model
 
 - Redis or Valkey remains the source of truth.
 - Slizen cache and hotness state are disposable.
+- Writes are safest when they pass through Slizen because accepted writes invalidate local cache entries.
 - Direct upstream writes may remain stale through Slizen until local TTL expiration.
-- Keep the admin API private; v0.1 has no built-in auth.
-- Test with your workload before production.
+- Keep the admin API private. v0.1 has no built-in admin authentication.
+- Slizen should not log values, authentication data, or raw Redis keys in metrics/logs.
 
-## Limitations
+## Known limitations
 
-- Developer preview, not production-ready.
+- Developer preview; not production-ready.
 - Single-node only.
 - Limited Redis command compatibility.
-- Local benchmark results are workload and machine dependent.
+- No mesh, gossip, Redis Cluster, Pub/Sub, transactions, blocking commands, RESP3, Kubernetes integration, or built-in auth.
+- Local benchmark results depend on machine, Docker, Redis/Valkey, and workload shape.
 - `observe` mode measures heat but does not reduce origin load.
 
-## Roadmap
+## What is next
 
-- More compatibility tests and documented command coverage.
-- More benchmark workloads beyond one fixed hot key.
-- Per-prefix cache policy.
-- RESP3 and server-assisted invalidation research.
-- Static multi-node membership after the single-node contract is stable.
+- Keep tightening compatibility tests and documentation.
+- Add more benchmark workloads beyond one fixed hot key.
+- Add per-prefix cache policy.
+- Research RESP3 and server-assisted invalidation.
+- Consider static multi-node membership only after the single-node contract is stable.

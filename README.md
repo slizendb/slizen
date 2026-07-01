@@ -1,10 +1,14 @@
-# Hot-key autopilot for Redis and Valkey.
+# Slizen
 
-Slizen is a self-hosted adaptive cache layer for read-heavy Redis and Valkey workloads.
+[![CI](https://github.com/slizendb/slizen/actions/workflows/ci.yml/badge.svg)](https://github.com/slizendb/slizen/actions/workflows/ci.yml)
+![Go](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)
+![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 
-Slizen detects read-hot keys, promotes them into a bounded local cache, coalesces cache misses, and protects your upstream from sudden traffic spikes.
+**Developer Preview.** Hot-key autopilot for Redis and Valkey.
 
-Slizen v0.1 is single-node. It is not a source of truth, does not replicate values between Slizen nodes, is not fully Redis-compatible, and production use requires careful workload testing.
+Slizen is a self-hosted adaptive cache layer for read-heavy Redis and Valkey workloads. It detects read-hot keys, promotes them into a bounded local cache, coalesces cache misses, and protects your upstream from sudden traffic spikes.
+
+Slizen v0.1 is single-node, not a source of truth, and has limited Redis compatibility. Direct upstream writes may remain stale until local TTL expiration. The admin API binds locally by default and has no built-in authentication in v0.1.
 
 ```mermaid
 flowchart LR
@@ -18,14 +22,22 @@ flowchart LR
 
 ## Quick Start
 
+Requires Docker Compose.
+
+```sh
+git clone https://github.com/slizendb/slizen.git
+cd slizen
+make demo-up
+make demo
+curl http://127.0.0.1:9090/v1/status
+make demo-down
+```
+
+For local Go-only development against an existing Redis or Valkey on `127.0.0.1:6379`:
+
 ```sh
 cp slizen.example.toml slizen.toml
 go run ./cmd/slizend --config ./slizen.toml
-```
-
-In another terminal:
-
-```sh
 redis-cli -p 6380 SET product:iphone_17 '{"name":"iPhone 17","price":999}'
 redis-cli -p 6380 GET product:iphone_17
 go run ./cmd/slizenctl status --admin http://127.0.0.1:9090
@@ -163,9 +175,12 @@ make demo-down
 
 Release prep:
 
+- [CHANGELOG.md](CHANGELOG.md)
+- [docs/DEMO.md](docs/DEMO.md)
 - [docs/BENCHMARKING.md](docs/BENCHMARKING.md)
 - [docs/REDIS_COMPATIBILITY.md](docs/REDIS_COMPATIBILITY.md)
 - [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
+- [docs/PUBLIC_RELEASE_CHECKLIST.md](docs/PUBLIC_RELEASE_CHECKLIST.md)
 - [docs/RELEASE_NOTES_v0.1.md](docs/RELEASE_NOTES_v0.1.md)
 
 ## Limitations
