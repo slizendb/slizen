@@ -18,8 +18,8 @@ jobs:
           --health-timeout 1s
           --health-retries 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -33,8 +33,8 @@ jobs:
   release-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -56,8 +56,8 @@ jobs:
           --health-timeout 1s
           --health-retries 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -103,7 +103,7 @@ jobs:
             --json-file /tmp/slizen-benchmark-result.json
           test -s /tmp/slizen-benchmark-result.json
       - name: Upload benchmark artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: slizen-benchmark-result
@@ -129,7 +129,7 @@ jobs:
           BENCHMARK_REQUESTS=5000 \
             make demo-report
       - name: Upload demo report artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: slizen-demo-report
