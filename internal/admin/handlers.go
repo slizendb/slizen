@@ -1,14 +1,17 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
+
+	"github.com/slizendb/slizen/internal/service"
 )
 
 const maxPurgeBodyBytes int64 = 1024
@@ -19,6 +22,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.Handle("/metrics", s.svc.Metrics().Handler())
 	mux.HandleFunc("/v1/status", s.handleStatus)
 	mux.HandleFunc("/v1/hotkeys", s.handleHotKeys)
+	mux.HandleFunc("/v1/audit", s.handleAudit)
 	mux.HandleFunc("/v1/cache", s.handleCache)
 	mux.HandleFunc("/v1/cache/purge", s.handleCachePurge)
 }
@@ -54,7 +58,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := withShortTimeout(r)
 	defer cancel()
-	writeJSON(w, s.svc.Status(ctx))
+	s.writeJSON(w, s.svc.Status(ctx))
 }
 
 func (s *Server) handleHotKeys(w http.ResponseWriter, r *http.Request) {
@@ -65,13 +69,30 @@ func (s *Server) handleHotKeys(w http.ResponseWriter, r *http.Request) {
 	limit := 20
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 0 || parsed > 1000 {
+		if err != nil || parsed < 1 || parsed > 1000 {
 			http.Error(w, "invalid limit", http.StatusBadRequest)
 			return
 		}
 		limit = parsed
 	}
-	writeJSON(w, map[string]any{"hotkeys": s.svc.HotKeys(limit)})
+	s.writeJSON(w, map[string]any{"hotkeys": s.svc.HotKeys(limit)})
+}
+
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	limit := service.DefaultAuditLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > service.MaxAuditLimit {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+	s.writeJSON(w, s.svc.Audit(limit))
 }
 
 func (s *Server) handleCache(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +100,7 @@ func (s *Server) handleCache(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, s.svc.CacheInfo())
+	s.writeJSON(w, s.svc.CacheInfo())
 }
 
 func (s *Server) handleCachePurge(w http.ResponseWriter, r *http.Request) {
@@ -97,31 +118,44 @@ func (s *Server) handleCachePurge(w http.ResponseWriter, r *http.Request) {
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&body); err != nil {
 			if errors.Is(err, io.EOF) {
-				writeJSON(w, map[string]any{"purged": s.svc.PurgeCache("")})
+				s.writeJSON(w, map[string]any{"purged": s.svc.PurgeCache("")})
 				return
 			}
 			http.Error(w, "invalid purge request", http.StatusBadRequest)
 			return
 		}
-		body.Key = strings.TrimSpace(body.Key)
 		if len(body.Key) > 512 {
 			http.Error(w, "key is too long", http.StatusBadRequest)
 			return
 		}
 	}
 	purged := s.svc.PurgeCache(body.Key)
-	writeJSON(w, map[string]any{"purged": purged})
+	s.writeJSON(w, map[string]any{"purged": purged})
 }
 
 func withShortTimeout(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 2*time.Second)
 }
 
-func writeJSON(w http.ResponseWriter, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	encoder := json.NewEncoder(w)
+func (s *Server) writeJSON(w http.ResponseWriter, value any) {
+	if err := writeJSON(w, value); err != nil {
+		s.logger.Error("admin JSON response failed", "error", err)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, value any) error {
+	var body bytes.Buffer
+	encoder := json.NewEncoder(&body)
 	encoder.SetIndent("", "  ")
-	_ = encoder.Encode(value)
+	if err := encoder.Encode(value); err != nil {
+		http.Error(w, "response encoding failed", http.StatusInternalServerError)
+		return fmt.Errorf("encode JSON response: %w", err)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(body.Bytes()); err != nil {
+		return fmt.Errorf("write JSON response: %w", err)
+	}
+	return nil
 }
 
 func methodNotAllowed(w http.ResponseWriter) {

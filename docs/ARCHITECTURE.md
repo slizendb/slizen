@@ -1,6 +1,6 @@
 # Architecture
 
-Slizen v0.1 is a single-node adaptive cache layer for read-heavy Redis and Valkey workloads.
+Slizen v0.2 is a single-node adaptive cache layer for read-heavy Redis and Valkey workloads.
 
 ```mermaid
 flowchart LR
@@ -15,25 +15,25 @@ flowchart LR
 
 ## Request flow
 
-GET records a hotness observation, checks the local cache in `cache` mode, coalesces concurrent misses with `singleflight`, fetches from upstream on miss, and stores the value locally only after the key is eligible for promotion. MGET preserves input order, uses local hits where possible in `cache` mode, and fetches remaining keys from upstream in a batch.
+GET first resolves an immutable, configuration-bounded per-prefix decision with literal, case-sensitive longest-prefix matching. A `deny` decision bypasses hotness and every local-cache path, `observe` records hotness but always forwards upstream, and `cache` enables the adaptive cache flow. Cache-mode GET checks local state, coalesces concurrent misses with `singleflight`, fetches from upstream on miss, and stores the value only after the key is eligible for promotion. MGET resolves each key independently, preserves input order, uses eligible local hits, and fetches all remaining keys in one upstream batch. Both refill paths use a fixed-size striped epoch guard so a read that overlaps a proxied write cannot restore a superseded value after invalidation.
 
 In `observe` mode, Slizen still records hotness and forwards reads to upstream, but it never serves local cache hits, never coalesces `GET` requests, and never stores values locally. This mode is intended for safe heat discovery before enabling adaptive caching.
 
-Write commands are sent upstream first. Slizen invalidates local entries only after upstream accepts the write, so it never acknowledges a write that Redis or Valkey rejected.
+Write commands are sent upstream first. Successful writes invalidate affected local entries before Slizen replies. If the upstream returns an error, Slizen returns that error and conservatively invalidates the affected entries because a timeout or connection failure can leave the write outcome ambiguous. Cache invalidation never turns a rejected write into an acknowledged write; Redis or Valkey remains authoritative.
 
 ## Cache model
 
-The local cache is a bounded, in-memory LRU-style cache. Size accounting includes key bytes, value bytes, and a fixed per-entry overhead estimate. This is not exact runtime heap accounting, but the approximation is enforced consistently.
+The local cache is a bounded, in-memory LRU-style cache. Size accounting includes key bytes, value bytes, and a fixed per-entry overhead estimate. This is not exact runtime heap accounting, but the approximation is enforced consistently for global capacity and per-prefix `max_item_bytes` limits.
 
-Local TTL is the smaller of the remaining upstream TTL and configured `cache.max_local_ttl`. Upstream keys without expiration use `cache.max_local_ttl`. Missing keys are not cached indefinitely; negative caching is disabled by default.
+Local TTL is the smallest of the remaining positive upstream TTL, configured `cache.max_local_ttl`, and the matching cache policy's `max_local_ttl`. Upstream keys without expiration use the applicable local cap, while values whose upstream PTTL has reached zero are not stored. Missing keys are not cached indefinitely; negative caching is disabled by default.
 
 ## Hotness model
 
-The hotness tracker uses bounded per-key state, fixed scoring windows, EWMA decay, promotion hysteresis, and a cooldown state. It avoids retaining a counter for every key ever observed by evicting low-score or old entries when the configured maximum is reached.
+The hotness tracker uses bounded per-key state, fixed scoring windows, EWMA decay, promotion hysteresis, and a cooldown state. It avoids retaining a counter for every key ever observed by evicting low-score or old entries when the configured maximum is reached. The configured maximum is capped at 100,000 entries. Keys over 1,024 bytes are forwarded but skipped by the tracker and therefore cannot enter the local cache; the audit completeness flag and `slizen_hotness_oversized_observations_dropped_total` expose that loss of telemetry. Window catch-up uses closed-form decay and preserves cooldown transitions without work proportional to the number of missed windows.
 
 ## Consistency model
 
-Slizen v0.1 is safe when writes pass through Slizen. External writes directly to Redis or Valkey may remain stale until local TTL expiration. Stale reads during upstream outages are disabled by default and require explicit opt-in.
+Slizen v0.2 is safe when writes pass through Slizen. External writes directly to Redis or Valkey may remain stale until local TTL expiration. Stale reads during upstream outages are disabled by default and require explicit opt-in.
 
 ## Operations
 
@@ -44,7 +44,9 @@ The daemon exposes:
 
 The active mode is exposed in `/v1/status`.
 
-The admin listener is unauthenticated in v0.1 and must not be exposed publicly.
+The admin listener is unauthenticated in v0.2 and must not be exposed publicly.
+
+Normal response flushes receive a fresh `proxy.write_timeout` deadline, so a client that stops reading cannot pin a connection goroutine indefinitely. On shutdown, the proxy stops admitting new command handlers and wakes idle or partial-request clients. Accepted handlers and their connections are allowed to finish and flush for at most `proxy.shutdown_timeout`; after that deadline Slizen cancels the server-owned request context and force-closes the listener and remaining sockets.
 
 ## Privacy
 

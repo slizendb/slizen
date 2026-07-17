@@ -1,16 +1,111 @@
 # Benchmarking
 
-Slizen includes a reproducible local hot-key benchmark for demo and regression evidence.
+Slizen ships two local benchmark paths:
 
-## Run
+- `benchmark hotkey` is the v0.1 single-key demo and remains available for existing scripts.
+- `benchmark workload` is the v0.2 release workload harness for uniform, skewed, and moving-hot-key traffic.
 
-Start the Docker Compose demo:
+Both paths produce local evidence for a specific machine and configuration. They are not scientific benchmarks or universal production capacity claims.
+
+## Start the local stack
 
 ```sh
 make demo-up
 ```
 
-Run the benchmark:
+Use a dedicated Redis or Valkey instance and a quiescent, exclusive Slizen process. The workload harness creates persistent keys under a unique invocation-specific suffix of `slizen:benchmark` by default and runs writes against them. The unique namespace gives every run unseen hotness state without a production hotness-reset endpoint.
+
+When per-prefix cache policy is enabled, choose a `--key-prefix` covered by the policy you intend to measure. A bypassed prefix should correctly report no local-cache reduction.
+
+## Run the v0.2 workload suite
+
+The default `all` selection runs all four scenarios:
+
+```sh
+go run ./cmd/slizenctl benchmark workload \
+  --proxy 127.0.0.1:6380 \
+  --origin 127.0.0.1:6379 \
+  --admin http://127.0.0.1:9090 \
+  --scenario all \
+  --key-prefix slizen:benchmark \
+  --keys 1000 \
+  --value-size 1024 \
+  --read-ratio 95 \
+  --concurrency 32 \
+  --duration 10s \
+  --requests 100000 \
+  --seed 42 \
+  --flash-every 5000 \
+  --output text \
+  --json-file ./tmp/slizen-workload-result.json
+```
+
+Select one scenario with `--scenario uniform`, `--scenario skew-80-20`, `--scenario skew-99-1`, or `--scenario moving-flash`. Use `--output json` to write JSON to stdout; `--json-file` writes the same structured result independently of stdout format.
+
+`--duration` and `--requests` are both limits for each measured phase. A phase ends when it reaches either limit. `--read-ratio 95` means approximately 95 percent GET and 5 percent SET operations. `--read-ratio 100` produces a read-only workload.
+
+For `moving-flash` and `all`, `--flash-every` must be smaller than `--requests`; otherwise the advertised hot key could never move. A duration-limited run may still finish before a move, so choose limits that let at least `--flash-every + 1` operations complete.
+
+### Scenarios
+
+| Scenario | Deterministic request shape |
+| --- | --- |
+| `uniform` | Keys are selected uniformly from the configured key set. |
+| `skew-80-20` | Approximately 80 percent of operations select 20 percent of the keys; the rest select the remaining keys. |
+| `skew-99-1` | Approximately 99 percent of operations select 1 percent of the keys; the rest select the remaining keys. |
+| `moving-flash` | Approximately 99 percent of operations select one flash key. The flash key advances after `--flash-every` operations. |
+
+These are controlled workload shapes, not claims that every real traffic distribution follows those ratios.
+
+### Reproducibility
+
+The seed and zero-based operation index determine the operation type and selected key. Selection does not depend on goroutine scheduling, and the same seed and configuration produce the same operation sequence prefix. `isolated_key_prefix` is intentionally different for each invocation; it isolates disposable cache/hotness state and does not change the index distribution.
+
+Wall-clock duration can still change how much of that prefix completes. For closer comparisons, keep the machine idle, reuse the same runtime configuration, and set `--requests` low enough that both phases reach the request limit before `--duration`.
+
+### Measurement method
+
+For each selected scenario, the harness:
+
+1. Generates bounded keys and fixed-size values and seeds them directly into the origin.
+2. Runs the deterministic workload directly against the origin.
+3. Initializes all benchmark client connections, then purges Slizen's disposable local cache.
+4. Runs the same deterministic workload shape through Slizen.
+5. Reads Slizen counters before and after the proxy phase.
+
+The JSON result includes:
+
+- p50, p95, and p99 client-observed latency for successful operations;
+- successful reads and writes, failures, elapsed time, and operations per second for each phase;
+- origin GET reduction normalized per successful GET;
+- Slizen cache hit ratio from `/v1/status` counter deltas;
+- Slizen CLI and daemon versions, origin version, and the benchmark CLI's Go, operating system, and architecture information.
+- an `evidence_valid` flag and notes explaining any failed, non-isolated, reset, or restarted measurement.
+
+The origin version is read with `INFO server`. If the origin ACL denies that command or the version is absent, the field is `unknown` and the result records a note instead of failing the workload.
+
+`origin_get_reduction_percent` can be negative if a valid run observes more origin GETs per successful read through Slizen than in the direct phase. `proved_origin_get_reduction` is true only when the measured proxy phase has cache hits, a positive reduction, no failed operations, monotonic daemon identity/counters, and an exact process-global request delta. Any unrelated traffic through the same Slizen process invalidates the reduction evidence instead of being silently attributed to the benchmark. A zero or false result is valid evidence, especially for uniform, write-heavy, short, or `observe`-mode runs.
+
+Latency percentiles combine successful GET and SET operations according to the configured ratio. Compare runs only when value size, ratio, concurrency, limits, scenario, seed, Slizen configuration, and runtime environment match.
+
+### Resource bounds
+
+The CLI rejects configurations outside these limits:
+
+- concurrency: 1 to 1,024 workers;
+- measured operations: 1 to 1,000,000 per phase;
+- keys: 2 to 100,000 per scenario; `skew-80-20` needs at least 5, while `all` and `skew-99-1` need at least 100;
+- value size: 1 byte to 1 MiB;
+- aggregate generated dataset: 256 MiB across selected scenarios;
+- duration: greater than zero and at most one hour;
+- generated key prefix: at most 128 bytes.
+- admin status response: at most 64 KiB; other CLI admin JSON responses are capped at 4 MiB.
+
+Latency samples are bounded by the operation limit, seed pipelines are bounded by bytes, and scenario/key state is bounded by the configured dataset limits.
+
+## Run the v0.1 hot-key benchmark
+
+Existing demo and report scripts continue to use:
 
 ```sh
 go run ./cmd/slizenctl benchmark hotkey \
@@ -34,30 +129,10 @@ make benchmark
 make demo-report
 ```
 
-## What It Measures
+`benchmark hotkey` runs `origin direct`, `slizen cold`, and `slizen hot` phases. It reports client latency plus cache hits, misses, and origin GET reduction from `/v1/status`. Its JSON schema remains additive-compatible with the v0.1 demo report and now includes runtime versions.
 
-`slizenctl benchmark hotkey` runs three phases:
+## Interpreting results
 
-1. `origin direct`: reads the key directly from Redis or Valkey.
-2. `slizen cold`: reads through Slizen before intentionally warming the key.
-3. `slizen hot`: warms the key, then reads through Slizen after promotion.
+Slizen is not always faster than a direct local Redis or Valkey connection. The extra proxy hop can cost more than it saves for cold keys, uniform traffic, small deployments, short tests, or write-heavy workloads.
 
-Latency and ops/sec are measured from real client requests. Cache hits, misses, upstream GETs, promotions, and invalidations are read from `/v1/status` before and after each phase.
-
-## Interpreting Results
-
-The main proof fields are:
-
-- `cache_hit_ratio_percent`: percentage of Slizen hot-phase reads served from local cache.
-- `upstream_get_reduction_percent`: reduction in upstream GETs per successful request compared with direct origin reads.
-- `proved_reduction`: true only when the run produced cache hits and fewer upstream GETs during the hot phase.
-
-If `proved_reduction` is false, the benchmark reports that honestly. Common causes are `observe` mode, insufficient warmup, a threshold that was not reached, or a workload that is not hot-key shaped.
-
-## What This Is Not
-
-This is not a scientific benchmark and not a production capacity claim. It runs on local hardware, local Docker networking, a single key, and one Slizen node.
-
-Slizen is not always faster than direct Redis or Valkey. For cold keys, evenly distributed reads, small local deployments, or write-heavy workloads, the proxy hop can cost more than the cache saves.
-
-Slizen is useful when the workload is read-heavy and skewed: one or a few keys receive enough repeated GET traffic that local cache hits reduce origin pressure.
+The intended signal is narrower: under a repeated, read-heavy skew, determine whether local cache hits reduce measured origin GET pressure while keeping latency acceptable for that environment. Repeat runs and preserve the JSON artifacts before using the result to make a rollout decision.

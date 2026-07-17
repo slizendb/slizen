@@ -1,0 +1,94 @@
+{{- if and (eq .Values.admin.listen "0.0.0.0:9090") (not .Values.admin.allowNetworkAccess) }}
+{{- fail "admin.allowNetworkAccess must be true before admin.listen can use 0.0.0.0:9090" }}
+{{- end }}
+{{- if le (float64 .Values.hotness.promotionThreshold) (float64 .Values.hotness.demotionThreshold) }}
+{{- fail "hotness.promotionThreshold must be greater than hotness.demotionThreshold" }}
+{{- end }}
+{{- $globalMaxItemBytes := int64 .Values.cache.maxBytes }}
+{{- $globalMaxLocalTTL := include "slizen.durationNanoseconds" (list .Values.cache.maxLocalTTL "cache.maxLocalTTL") | int64 }}
+{{- $seenPolicyPrefixes := dict }}
+{{- $totalPolicyPrefixBytes := 0 }}
+{{- range $index, $policy := .Values.cache.policies }}
+{{- $path := printf "cache.policies[%d]" $index }}
+{{- $prefixBytes := len $policy.prefix }}
+{{- if gt $prefixBytes 1024 }}
+{{- fail (printf "%s.prefix must contain at most 1024 bytes" $path) }}
+{{- end }}
+{{- $totalPolicyPrefixBytes = add $totalPolicyPrefixBytes $prefixBytes }}
+{{- if hasKey $seenPolicyPrefixes $policy.prefix }}
+{{- fail (printf "%s.prefix duplicates another policy" $path) }}
+{{- end }}
+{{- $_ := set $seenPolicyPrefixes $policy.prefix true }}
+{{- if eq $policy.mode "cache" }}
+{{- if gt (int64 $policy.maxItemBytes) $globalMaxItemBytes }}
+{{- fail (printf "%s.maxItemBytes must not exceed cache.maxBytes" $path) }}
+{{- end }}
+{{- $policyMaxLocalTTL := include "slizen.durationNanoseconds" (list $policy.maxLocalTTL (printf "%s.maxLocalTTL" $path)) | int64 }}
+{{- if gt $policyMaxLocalTTL $globalMaxLocalTTL }}
+{{- fail (printf "%s.maxLocalTTL must not exceed cache.maxLocalTTL" $path) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if gt $totalPolicyPrefixBytes 262144 }}
+{{- fail "cache.policies prefixes must contain at most 262144 bytes in total" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "slizen.fullname" . }}
+  labels:
+    {{- include "slizen.labels" . | nindent 4 }}
+data:
+  slizen.toml: |
+    mode = {{ .Values.mode | quote }}
+
+    [proxy]
+    listen = "0.0.0.0:6380"
+    read_timeout = {{ .Values.proxy.readTimeout | quote }}
+    write_timeout = {{ .Values.proxy.writeTimeout | quote }}
+    shutdown_timeout = {{ .Values.proxy.shutdownTimeout | quote }}
+
+    [admin]
+    listen = {{ .Values.admin.listen | quote }}
+    expose_raw_keys = false
+
+    [upstream]
+    address = {{ .Values.upstream.address | quote }}
+    database = {{ .Values.upstream.database }}
+    dial_timeout = {{ .Values.upstream.dialTimeout | quote }}
+    read_timeout = {{ .Values.upstream.readTimeout | quote }}
+    write_timeout = {{ .Values.upstream.writeTimeout | quote }}
+
+    [cache]
+    max_bytes = {{ int64 .Values.cache.maxBytes }}
+    max_entries = {{ int .Values.cache.maxEntries }}
+    max_local_ttl = {{ .Values.cache.maxLocalTTL | quote }}
+    allow_stale_on_upstream_error = {{ .Values.cache.allowStaleOnUpstreamError }}
+    stale_grace = {{ .Values.cache.staleGrace | quote }}
+    negative_ttl = {{ .Values.cache.negativeTTL | quote }}
+    {{- range .Values.cache.policies }}
+
+    [[cache.policies]]
+    prefix = {{ .prefix | quote }}
+    mode = {{ .mode | quote }}
+    {{- if eq .mode "cache" }}
+    max_item_bytes = {{ int64 .maxItemBytes }}
+    max_local_ttl = {{ .maxLocalTTL | quote }}
+    {{- end }}
+    {{- end }}
+
+    [hotness]
+    window = {{ .Values.hotness.window | quote }}
+    ewma_alpha = {{ .Values.hotness.ewmaAlpha }}
+    promotion_threshold = {{ .Values.hotness.promotionThreshold }}
+    demotion_threshold = {{ .Values.hotness.demotionThreshold }}
+    minimum_hot_windows = {{ .Values.hotness.minimumHotWindows }}
+    cooldown = {{ .Values.hotness.cooldown | quote }}
+    max_tracked_keys = {{ int .Values.hotness.maxTrackedKeys }}
+
+    [privacy]
+    key_visibility = "hash"
+
+    [logging]
+    level = {{ .Values.logging.level | quote }}
+    format = {{ .Values.logging.format | quote }}

@@ -71,6 +71,7 @@ go run -ldflags "-X github.com/slizendb/slizen/internal/buildinfo.Version=dev -X
 
 curl -fsS "${ADMIN_URL}/v1/status" > "${TMP_DIR}/status-after.json"
 curl -fsS "${ADMIN_URL}/v1/hotkeys" > "${TMP_DIR}/hotkeys.json"
+curl -fsS "${ADMIN_URL}/v1/audit" > "${TMP_DIR}/audit.json"
 
 python3 - <<'PY'
 import json
@@ -83,13 +84,14 @@ tmp = Path(os.environ.get("TMP_DIR", "./tmp"))
 benchmark = json.loads((tmp / "slizen-benchmark-result.json").read_text())
 before = json.loads((tmp / "status-before.json").read_text())
 after = json.loads((tmp / "status-after.json").read_text())
+audit = json.loads((tmp / "audit.json").read_text())
 commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
 version = after.get("version", "unknown")
 mode = after.get("mode", "unknown")
 visibility = after.get("key_visibility", "unknown")
 hot = benchmark["phases"][-1]
 
-report = f"""# Slizen v0.1 Demo Report
+report = f"""# Slizen v0.2 Demo Report
 
 Date: {datetime.now(timezone.utc).isoformat()}
 Git commit: `{commit}`
@@ -121,11 +123,21 @@ Key visibility: `{visibility}`
 - cache entries: {before.get("cache_entries", 0)} -> {after.get("cache_entries", 0)}
 - hot keys: {before.get("hot_keys", 0)} -> {after.get("hot_keys", 0)}
 
+## Observe/Audit Evidence
+
+- schema: `{audit.get("schema_version", "unknown")}`
+- tracked keys: {audit.get("tracked_keys", 0)}
+- returned entries: {audit.get("returned_entries", 0)}
+- truncated: {str(audit.get("truncated", False)).lower()}
+- telemetry complete: {str(audit.get("telemetry_complete", False)).lower()}
+- tracking evictions: {audit.get("tracking_evictions", 0)}
+- oversized observations dropped: {audit.get("oversized_observations_dropped", 0)}
+
 ## Limitations
 
 - This is a local Docker Compose demonstration, not a scientific benchmark.
 - Redis or Valkey remains the source of truth.
-- Slizen v0.1 is single-node and not production-ready.
+- Slizen v0.2 is single-node and not production-ready.
 - Results depend on local machine, Docker, Redis/Valkey, and workload shape.
 
 ## Repeat
@@ -141,6 +153,7 @@ Artifacts:
 - `./tmp/status-before.json`
 - `./tmp/status-after.json`
 - `./tmp/hotkeys.json`
+- `./tmp/audit.json`
 """
 
 (tmp / "demo-report.md").write_text(report)

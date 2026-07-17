@@ -26,33 +26,35 @@ type Snapshot struct {
 type Recorder struct {
 	registry *prometheus.Registry
 
-	requests        *prometheus.CounterVec
-	requestLatency  *prometheus.HistogramVec
-	cacheHits       *prometheus.CounterVec
-	cacheMisses     *prometheus.CounterVec
-	cacheEntries    prometheus.Gauge
-	cacheBytes      prometheus.Gauge
-	cacheEvictions  prometheus.Counter
-	upstreamReqs    *prometheus.CounterVec
-	upstreamErrors  *prometheus.CounterVec
-	upstreamLatency *prometheus.HistogramVec
-	hotKeys         prometheus.Gauge
-	promotions      prometheus.Counter
-	demotions       prometheus.Counter
-	invalidations   *prometheus.CounterVec
-	coalesced       prometheus.Counter
+	requests              *prometheus.CounterVec
+	requestLatency        *prometheus.HistogramVec
+	cacheHits             *prometheus.CounterVec
+	cacheMisses           *prometheus.CounterVec
+	cacheEntries          prometheus.Gauge
+	cacheBytes            prometheus.Gauge
+	cacheEvictions        prometheus.Counter
+	upstreamReqs          *prometheus.CounterVec
+	upstreamErrors        *prometheus.CounterVec
+	upstreamLatency       *prometheus.HistogramVec
+	hotKeys               prometheus.Gauge
+	promotions            prometheus.Counter
+	demotions             prometheus.Counter
+	invalidations         *prometheus.CounterVec
+	coalesced             prometheus.Counter
+	hotnessOversizedDrops prometheus.Counter
 
-	totalRequests     atomic.Uint64
-	totalCacheHits    atomic.Uint64
-	totalCacheMisses  atomic.Uint64
-	totalUpstreamReqs atomic.Uint64
-	totalUpstreamGets atomic.Uint64
-	totalUpstreamErrs atomic.Uint64
-	totalPromotions   atomic.Uint64
-	totalDemotions    atomic.Uint64
-	totalInvalidates  atomic.Uint64
-	totalCoalesced    atomic.Uint64
-	evictionSeen      atomic.Uint64
+	totalRequests            atomic.Uint64
+	totalCacheHits           atomic.Uint64
+	totalCacheMisses         atomic.Uint64
+	totalUpstreamReqs        atomic.Uint64
+	totalUpstreamGets        atomic.Uint64
+	totalUpstreamErrs        atomic.Uint64
+	totalPromotions          atomic.Uint64
+	totalDemotions           atomic.Uint64
+	totalInvalidates         atomic.Uint64
+	totalCoalesced           atomic.Uint64
+	evictionSeen             atomic.Uint64
+	hotnessOversizedDropSeen atomic.Uint64
 }
 
 func New() *Recorder {
@@ -72,6 +74,7 @@ func New() *Recorder {
 	r.demotions = prometheus.NewCounter(prometheus.CounterOpts{Name: "slizen_demotions_total", Help: "Total hot-key demotions."})
 	r.invalidations = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "slizen_invalidations_total", Help: "Total write-driven cache invalidations."}, []string{"reason"})
 	r.coalesced = prometheus.NewCounter(prometheus.CounterOpts{Name: "slizen_coalesced_requests_total", Help: "Total cache-miss requests served by singleflight coalescing."})
+	r.hotnessOversizedDrops = prometheus.NewCounter(prometheus.CounterOpts{Name: "slizen_hotness_oversized_observations_dropped_total", Help: "Total observations skipped because the Redis key exceeded the hotness tracking byte limit."})
 
 	r.registry.MustRegister(
 		r.requests,
@@ -89,6 +92,7 @@ func New() *Recorder {
 		r.demotions,
 		r.invalidations,
 		r.coalesced,
+		r.hotnessOversizedDrops,
 	)
 	return r
 }
@@ -119,9 +123,8 @@ func (r *Recorder) CacheMiss(command string) {
 func (r *Recorder) ObserveCache(entries int, bytes int64, evictions uint64) {
 	r.cacheEntries.Set(float64(entries))
 	r.cacheBytes.Set(float64(bytes))
-	previous := r.evictionSeen.Swap(evictions)
-	if evictions > previous {
-		r.cacheEvictions.Add(float64(evictions - previous))
+	if delta := advanceHighWater(&r.evictionSeen, evictions); delta > 0 {
+		r.cacheEvictions.Add(float64(delta))
 	}
 }
 
@@ -176,6 +179,24 @@ func (r *Recorder) Coalesced() {
 
 func (r *Recorder) SetHotKeys(count int) {
 	r.hotKeys.Set(float64(count))
+}
+
+func (r *Recorder) ObserveHotnessOversizedDrops(total uint64) {
+	if delta := advanceHighWater(&r.hotnessOversizedDropSeen, total); delta > 0 {
+		r.hotnessOversizedDrops.Add(float64(delta))
+	}
+}
+
+func advanceHighWater(mark *atomic.Uint64, total uint64) uint64 {
+	for {
+		previous := mark.Load()
+		if total <= previous {
+			return 0
+		}
+		if mark.CompareAndSwap(previous, total) {
+			return total - previous
+		}
+	}
 }
 
 func (r *Recorder) Snapshot() Snapshot {

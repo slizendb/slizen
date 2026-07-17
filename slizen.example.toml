@@ -4,6 +4,7 @@ mode = "cache"
 listen = "0.0.0.0:6380"
 read_timeout = "3s"
 write_timeout = "3s"
+# Maximum graceful proxy drain before remaining connections are force-closed.
 shutdown_timeout = "10s"
 
 [admin]
@@ -27,6 +28,18 @@ allow_stale_on_upstream_error = false
 stale_grace = "0s"
 negative_ttl = "0s"
 
+# Optional rules use literal longest-prefix matching. An empty prefix is a
+# catch-all. cache rules require both limits; deny/observe rules omit them.
+# [[cache.policies]]
+# prefix = "session:"
+# mode = "deny"
+#
+# [[cache.policies]]
+# prefix = "catalog:"
+# mode = "cache"
+# max_item_bytes = 1048576
+# max_local_ttl = "10s"
+
 [hotness]
 window = "1s"
 ewma_alpha = 0.5
@@ -34,6 +47,8 @@ promotion_threshold = 100
 demotion_threshold = 20
 minimum_hot_windows = 2
 cooldown = "30s"
+# Hard configuration cap: 100000. Keys over 1024 bytes are forwarded but are
+# not tracked or locally cached.
 max_tracked_keys = 100000
 
 [privacy]

@@ -1,0 +1,28 @@
+{{- if .Values.metrics.enabled }}
+{{- if not .Values.admin.allowNetworkAccess }}
+{{- fail "admin.allowNetworkAccess must be true when metrics.enabled is true" }}
+{{- end }}
+{{- if ne .Values.admin.listen "0.0.0.0:9090" }}
+{{- fail "admin.listen must be 0.0.0.0:9090 when metrics.enabled is true" }}
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "slizen.fullname" . }}-metrics
+  labels:
+    {{- include "slizen.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+  {{- with .Values.metrics.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "slizen.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: {{ .Values.metrics.service.port }}
+      targetPort: admin
+      protocol: TCP
+{{- end }}

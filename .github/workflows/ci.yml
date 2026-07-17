@@ -32,16 +32,27 @@ jobs:
 
   release-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.18.4
       - name: Download modules
         run: go mod download
       - name: Release check
         run: make release-check
+      - name: Upload release workload evidence
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: slizen-release-workload-result
+          path: tmp/slizen-workload-result.json
+          if-no-files-found: ignore
 
   vulnerability-check:
     runs-on: ubuntu-latest
@@ -55,6 +66,16 @@ jobs:
         run: go mod download
       - name: govulncheck
         run: make vulncheck
+
+  kubernetes-packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.18.4
+      - name: Validate Kubernetes manifests and Helm chart
+        run: make validate-k8s
 
   integration:
     runs-on: ubuntu-latest
@@ -114,13 +135,62 @@ jobs:
             --requests 5000 \
             --output json \
             --json-file /tmp/slizen-benchmark-result.json
-          test -s /tmp/slizen-benchmark-result.json
+          jq -e '
+            .name == "Slizen Hot Key Benchmark"
+            and (.runtime_versions.slizen | type == "string" and length > 0 and ascii_downcase != "unknown")
+            and (.runtime_versions.origin | type == "string" and length > 0 and ascii_downcase != "unknown")
+            and ((.phases | map(.name)) == ["origin direct", "slizen cold", "slizen hot"])
+          ' /tmp/slizen-benchmark-result.json >/dev/null
+
+          go run ./cmd/slizenctl benchmark workload \
+            --proxy 127.0.0.1:6380 \
+            --origin 127.0.0.1:6379 \
+            --admin http://127.0.0.1:9090 \
+            --scenario all \
+            --key-prefix slizen:ci:integration \
+            --keys 100 \
+            --value-size 128 \
+            --read-ratio 95 \
+            --concurrency 8 \
+            --duration 5s \
+            --requests 200000 \
+            --seed 42 \
+            --flash-every 40000 \
+            --output json \
+            --json-file /tmp/slizen-workload-result.json
+          jq -e --arg key_prefix "slizen:ci:integration" '
+            def known_version:
+              type == "string" and length > 0 and ascii_downcase != "unknown";
+            .name == "Slizen Release Workload Benchmark"
+            and .scenario_selection == "all"
+            and .key_prefix == $key_prefix
+            and (.isolated_key_prefix | type == "string" and startswith($key_prefix + ":run-") and length > ($key_prefix | length))
+            and (.runtime_versions.slizen | known_version)
+            and (.runtime_versions.origin | known_version)
+            and (.scenarios | type == "array" and length == 4)
+            and ((.scenarios | map(.name) | sort) == ["moving-flash", "skew-80-20", "skew-99-1", "uniform"])
+            and all(.scenarios[];
+              .evidence_valid == true
+              and (.slizen.cache_hits | type == "number")
+              and (.cache_hit_ratio_percent | type == "number")
+              and (.origin_get_reduction_percent | type == "number")
+            )
+            and any(.scenarios[];
+              .name == "skew-99-1"
+              and .proved_origin_get_reduction == true
+              and .slizen.cache_hits > 0
+              and .cache_hit_ratio_percent > 0
+              and .origin_get_reduction_percent > 0
+            )
+          ' /tmp/slizen-workload-result.json >/dev/null
       - name: Upload benchmark artifact
         uses: actions/upload-artifact@v7
         if: always()
         with:
           name: slizen-benchmark-result
-          path: /tmp/slizen-benchmark-result.json
+          path: |
+            /tmp/slizen-benchmark-result.json
+            /tmp/slizen-workload-result.json
           if-no-files-found: ignore
       - name: Docker Compose smoke and report
         run: |
@@ -151,5 +221,6 @@ jobs:
             tmp/status-before.json
             tmp/status-after.json
             tmp/hotkeys.json
+            tmp/audit.json
             tmp/demo-report.md
           if-no-files-found: ignore

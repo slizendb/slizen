@@ -87,6 +87,17 @@ if ! grep -q 'hmac-sha256:' <<<"${hotkeys}"; then
   exit 1
 fi
 
+docker compose exec -T slizend /usr/local/bin/slizenctl audit --admin http://127.0.0.1:9090 >/tmp/slizen-audit.json
+audit="$(cat /tmp/slizen-audit.json)"
+if grep -Eq 'iphone_17|product:iphone|demo-secret' <<<"${audit}"; then
+  echo "audit leaked a raw key or secret" >&2
+  exit 1
+fi
+if ! grep -q 'slizen.audit.v1' <<<"${audit}" || ! grep -q 'reason_codes' <<<"${audit}" || ! grep -q 'hmac-sha256:' <<<"${audit}" || ! grep -q '"telemetry_complete": true' <<<"${audit}"; then
+  echo "audit did not contain the expected bounded report fields" >&2
+  exit 1
+fi
+
 metrics="$(curl -fsS "${ADMIN_URL}/metrics")"
 if grep -Eq 'iphone_17|product:iphone' <<<"${metrics}"; then
   echo "metrics leaked raw key" >&2

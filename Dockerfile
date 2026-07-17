@@ -11,6 +11,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/slizendb/sliz
 
 FROM gcr.io/distroless/static-debian12:nonroot
 
+LABEL org.opencontainers.image.source="https://github.com/slizendb/slizen"
+
 COPY --from=build /out/slizend /usr/local/bin/slizend
 COPY --from=build /out/slizenctl /usr/local/bin/slizenctl
 COPY slizen.example.toml /etc/slizen/slizen.toml

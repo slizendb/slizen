@@ -1,11 +1,11 @@
 # Slizen Project Rules
 
-Slizen is a self-hosted adaptive cache mesh for Redis and Valkey. Version 0.1 is a single-node Redis-compatible read proxy with explicit `observe` and `cache` modes, a bounded local cache, hot-key detection, request coalescing, metrics, an admin API, CLI tooling, and a reproducible Black Friday hot-key demo.
+Slizen is a self-hosted adaptive cache layer for Redis and Valkey. Version 0.2 is a single-node Redis-compatible read proxy with bounded per-prefix `deny`, `observe`, and `cache` policies, a bounded local cache, hot-key detection, request coalescing, a privacy-safe audit, reproducible workload evidence, metrics, an admin API, CLI tooling, and observe-first Kubernetes packaging.
 
 ## Product Boundaries
 
 - Redis or Valkey remains the source of truth.
-- Slizen is not a durable database, PostgreSQL replacement, Redis Cluster replacement, consensus system, transactional store, source of truth, fully Redis-compatible server, or distributed mesh in v0.1.
+- Slizen is not a durable database, PostgreSQL replacement, Redis Cluster replacement, consensus system, transactional store, source of truth, fully Redis-compatible server, or distributed mesh in v0.2.
 - The cache and hotness state are disposable and may be lost on restart.
 - Writes are safest when they pass through Slizen. Direct upstream writes may remain stale until local TTL expiration.
 - In `observe` mode, Slizen must forward reads and collect telemetry without serving or storing local cached values.
@@ -27,7 +27,7 @@ Slizen is a self-hosted adaptive cache mesh for Redis and Valkey. Version 0.1 is
 - Do not log cached values, passwords, authentication data, or complete sensitive keys.
 - Never use Redis keys or unbounded user input as Prometheus labels.
 - Bound HTTP bodies, cache memory, and hotness tracking memory.
-- Do not leave v0.1 core behavior as TODOs. TODOs are acceptable only for documented post-v0.1 roadmap items.
+- Do not leave v0.2 core behavior as TODOs. TODOs are acceptable only for documented post-v0.2 roadmap items.
 
 ## Verification
 
@@ -40,9 +40,12 @@ go test ./...
 go test -race ./...
 ```
 
-Docker demo verification:
+Docker, workload, and Kubernetes packaging verification:
 
 ```sh
-docker compose up --build -d
-go run ./cmd/slizenctl demo black-friday --redis 127.0.0.1:6380 --admin http://127.0.0.1:9090 --key product:iphone_17 --workers 100 --duration 20s
+make validate-k8s
+make smoke
+make demo-up
+make benchmark-workload
+make demo-down
 ```

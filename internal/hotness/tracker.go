@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const MaxTrackedKeyBytes = 1024
+
 type Clock interface {
 	Now() time.Time
 }
@@ -47,11 +49,26 @@ type entry struct {
 }
 
 type Tracker struct {
-	mu     sync.Mutex
-	cfg    Config
-	clock  Clock
-	window time.Time
-	items  map[string]*entry
+	mu                           sync.Mutex
+	cfg                          Config
+	clock                        Clock
+	window                       time.Time
+	items                        map[string]*entry
+	evictions                    uint64
+	oversizedObservationsDropped uint64
+}
+
+// View is an atomic point-in-time view of the tracker. Transitions and
+// snapshots are derived from the same clock reading while the tracker is
+// locked, so callers cannot accidentally discard a state change at a window
+// boundary.
+type View struct {
+	Transitions                  []Transition
+	Snapshots                    []Snapshot
+	Tracked                      int
+	Hot                          int
+	Evictions                    uint64
+	OversizedObservationsDropped uint64
 }
 
 func New(cfg Config) *Tracker {
@@ -86,10 +103,16 @@ func (t *Tracker) Observe(key string) []Transition {
 	defer t.mu.Unlock()
 
 	transitions := t.advanceLocked(now)
-	if key == "" {
+	if key == "" || len(key) > MaxTrackedKeyBytes {
+		if len(key) > MaxTrackedKeyBytes {
+			t.oversizedObservationsDropped++
+		}
 		return transitions
 	}
-	ent := t.getOrCreateLocked(key, now)
+	ent, evictionTransition := t.getOrCreateLocked(key, now)
+	if evictionTransition != nil {
+		transitions = append(transitions, *evictionTransition)
+	}
 	ent.count++
 	ent.lastSeen = now
 	return transitions
@@ -124,30 +147,62 @@ func (t *Tracker) Stats() (tracked int, hot int) {
 	return len(t.items), hot
 }
 
+func (t *Tracker) Evictions() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.evictions
+}
+
+func (t *Tracker) OversizedObservationsDropped() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.oversizedObservationsDropped
+}
+
+// AdvanceAndSnapshot advances the scoring window and returns all resulting
+// transitions together with a bounded snapshot from the same instant.
+func (t *Tracker) AdvanceAndSnapshot(limit int) View {
+	now := t.clock.Now()
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	view := View{
+		Transitions:                  t.advanceLocked(now),
+		Tracked:                      len(t.items),
+		Evictions:                    t.evictions,
+		OversizedObservationsDropped: t.oversizedObservationsDropped,
+	}
+	for _, ent := range t.items {
+		if ent.state == StateHot {
+			view.Hot++
+		}
+	}
+	view.Snapshots = topSnapshots(t.items, now, limit)
+	return view
+}
+
+// Snapshots returns current state without advancing the scoring window. Code
+// that needs up-to-date transitions must use AdvanceAndSnapshot so transitions
+// cannot be silently discarded.
 func (t *Tracker) Snapshots(limit int) []Snapshot {
 	now := t.clock.Now()
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.advanceLocked(now)
-	out := make([]Snapshot, 0, len(t.items))
-	for _, ent := range t.items {
-		out = append(out, ent.snapshot(now))
-	}
-	sortSnapshots(out)
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out
+	return topSnapshots(t.items, now, limit)
 }
 
-func (t *Tracker) getOrCreateLocked(key string, now time.Time) *entry {
+func (t *Tracker) getOrCreateLocked(key string, now time.Time) (*entry, *Transition) {
 	if ent, ok := t.items[key]; ok {
-		return ent
+		return ent, nil
 	}
+	var evictionTransition *Transition
 	if len(t.items) >= t.cfg.MaxTrackedKeys {
-		t.evictOneLocked()
+		if victim := t.evictOneLocked(); victim != nil && victim.state != StateCold {
+			evictionTransition = &Transition{Key: victim.key, From: victim.state, To: StateCold}
+		}
 	}
 	ent := &entry{
 		key:       key,
@@ -156,35 +211,129 @@ func (t *Tracker) getOrCreateLocked(key string, now time.Time) *entry {
 		createdAt: now,
 	}
 	t.items[key] = ent
-	return ent
+	return ent, evictionTransition
 }
 
 func (t *Tracker) advanceLocked(now time.Time) []Transition {
 	if now.Before(t.window.Add(t.cfg.Window)) {
 		return nil
 	}
-	elapsedWindows := int(now.Sub(t.window) / t.cfg.Window)
+	elapsedWindows := int64(now.Sub(t.window) / t.cfg.Window)
 	if elapsedWindows < 1 {
 		elapsedWindows = 1
 	}
 	transitions := make([]Transition, 0)
+	firstBoundary := t.window.Add(t.cfg.Window)
 	for _, ent := range t.items {
 		rate := float64(ent.count) / t.cfg.Window.Seconds()
-		ent.lastRate = rate
-		decayed := ent.score
-		for i := 0; i < elapsedWindows; i++ {
-			if i == 0 {
-				decayed = t.cfg.EWMAAlpha*rate + (1-t.cfg.EWMAAlpha)*decayed
-			} else {
-				decayed = (1 - t.cfg.EWMAAlpha) * decayed
-			}
-		}
-		ent.score = decayed
+		transitions = append(transitions, t.advanceEntryLocked(ent, rate, elapsedWindows, firstBoundary)...)
 		ent.count = 0
-		transitions = append(transitions, t.applyStateLocked(ent, now)...)
 	}
 	t.window = t.window.Add(time.Duration(elapsedWindows) * t.cfg.Window)
 	return transitions
+}
+
+func (t *Tracker) advanceEntryLocked(ent *entry, rate float64, elapsedWindows int64, firstBoundary time.Time) []Transition {
+	beta := 1 - t.cfg.EWMAAlpha
+	firstScore := t.cfg.EWMAAlpha*rate + beta*ent.score
+	ent.score = firstScore
+	ent.lastRate = rate
+	transitions := t.applyStateLocked(ent, firstBoundary)
+	if elapsedWindows == 1 {
+		return transitions
+	}
+
+	// The count belongs to the oldest completed window. Every later elapsed
+	// window was empty, so both score decay and state transitions can be caught
+	// up by threshold segments instead of iterating once per skipped window.
+	remaining := elapsedWindows - 1
+	ent.lastRate = 0
+	highWindows := decayWindowsAtLeast(firstScore, beta, t.cfg.PromotionThreshold, remaining)
+	atLeastDemotion := decayWindowsAtLeast(firstScore, beta, t.cfg.DemotionThreshold, remaining)
+	midWindows := atLeastDemotion - highWindows
+	lowWindows := remaining - atLeastDemotion
+
+	if highWindows > 0 {
+		before := ent.state
+		if ent.state == StateCooling {
+			ent.state = StateHot
+			ent.coolingAt = time.Time{}
+		}
+		needed := int64(t.cfg.MinimumHotWindows - ent.hotWindows)
+		if needed < 0 {
+			needed = 0
+		}
+		if ent.state != StateHot && highWindows >= needed {
+			ent.state = StateHot
+		}
+		if highWindows >= int64(t.cfg.MinimumHotWindows) || int64(ent.hotWindows)+highWindows >= int64(t.cfg.MinimumHotWindows) {
+			ent.hotWindows = t.cfg.MinimumHotWindows
+		} else {
+			ent.hotWindows += int(highWindows)
+		}
+		if before != ent.state {
+			transitions = append(transitions, Transition{Key: ent.key, From: before, To: ent.state})
+		}
+	}
+
+	if midWindows > 0 {
+		before := ent.state
+		ent.hotWindows = 0
+		if ent.state == StateCold {
+			ent.state = StateWarm
+		}
+		if before != ent.state {
+			transitions = append(transitions, Transition{Key: ent.key, From: before, To: ent.state})
+		}
+	}
+
+	finalScore := firstScore * math.Pow(beta, float64(remaining))
+	if lowWindows > 0 {
+		ent.hotWindows = 0
+		lowStartOffset := highWindows + midWindows + 1
+		lowStart := firstBoundary.Add(time.Duration(lowStartOffset) * t.cfg.Window)
+		if ent.state == StateHot {
+			ent.state = StateCooling
+			ent.coolingAt = lowStart
+			transitions = append(transitions, Transition{Key: ent.key, From: StateHot, To: StateCooling})
+		}
+		finalBoundary := firstBoundary.Add(time.Duration(remaining) * t.cfg.Window)
+		if ent.state == StateCooling && finalBoundary.Sub(ent.coolingAt) >= t.cfg.Cooldown {
+			ent.state = StateCold
+			ent.coolingAt = time.Time{}
+			transitions = append(transitions, Transition{Key: ent.key, From: StateCooling, To: StateCold})
+		} else if ent.state == StateWarm && finalScore == 0 {
+			ent.state = StateCold
+			transitions = append(transitions, Transition{Key: ent.key, From: StateWarm, To: StateCold})
+		}
+	}
+	ent.score = finalScore
+	return transitions
+}
+
+// decayWindowsAtLeast returns how many of the next maxWindows empty-window
+// scores (initial*decay^1, initial*decay^2, ...) are at least threshold.
+func decayWindowsAtLeast(initial, decay, threshold float64, maxWindows int64) int64 {
+	if maxWindows <= 0 || initial <= 0 || threshold <= 0 || decay <= 0 || initial*decay < threshold {
+		return 0
+	}
+	if decay >= 1 || initial*math.Pow(decay, float64(maxWindows)) >= threshold {
+		return maxWindows
+	}
+	estimate := int64(math.Floor(math.Log(threshold/initial) / math.Log(decay)))
+	if estimate < 0 {
+		estimate = 0
+	}
+	if estimate > maxWindows {
+		estimate = maxWindows
+	}
+	for estimate > 0 && initial*math.Pow(decay, float64(estimate)) < threshold {
+		estimate--
+	}
+	for estimate < maxWindows && initial*math.Pow(decay, float64(estimate+1)) >= threshold {
+		estimate++
+	}
+	return estimate
 }
 
 func (t *Tracker) applyStateLocked(ent *entry, now time.Time) []Transition {
@@ -226,7 +375,7 @@ func (t *Tracker) applyStateLocked(ent *entry, now time.Time) []Transition {
 	return []Transition{{Key: ent.key, From: before, To: ent.state}}
 }
 
-func (t *Tracker) evictOneLocked() {
+func (t *Tracker) evictOneLocked() *entry {
 	var victim *entry
 	for _, ent := range t.items {
 		if victim == nil {
@@ -239,7 +388,9 @@ func (t *Tracker) evictOneLocked() {
 	}
 	if victim != nil {
 		delete(t.items, victim.key)
+		t.evictions++
 	}
+	return victim
 }
 
 func (e *entry) snapshot(now time.Time) Snapshot {

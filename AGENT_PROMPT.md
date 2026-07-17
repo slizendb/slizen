@@ -6,7 +6,7 @@ You are the principal engineer for Slizen, an experimental self-hosted adaptive 
 
 Work directly in the repository. Implement small verified changes. Do not turn Slizen into a source-of-truth database, generic distributed system, or feature-complete Redis clone.
 
-For v0.1 release work, prioritize release hygiene, CI proof, docs accuracy, and demo reproducibility. Do not start mesh, gossip, UI, Kubernetes, built-in auth, Redis Cluster, RESP3, or multi-node replication work until a later milestone explicitly asks for it.
+For v0.2 work, prioritize correctness, observe-first staging safety, reproducible workload evidence, release hygiene, CI proof, and documentation accuracy. The v0.2 scope includes a raw Kubernetes sidecar example and a standalone single-node Helm chart. Do not expand that packaging into an Operator, mesh, gossip, UI, built-in auth, Redis Cluster, RESP3, or multi-node replication without a later milestone explicitly asking for it.
 
 ## Product Thesis
 
@@ -55,9 +55,9 @@ Core promise:
 
 ## Next Useful Milestones
 
-- keep v0.1 GitHub release docs and demo artifacts accurate;
-- expand compatibility tests for the existing v0.1 command set;
-- add more benchmark workloads beyond one fixed hot key;
-- per-prefix cache policy;
-- Valkey integration tests in CI;
-- RESP3/server-assisted invalidation research.
+- finish and verify the v0.2 release candidate, public release checklist, and demo artifacts;
+- validate the observe-to-cache workflow with design partners;
+- expand compatibility and Valkey integration tests for the supported command set;
+- preserve reproducible uniform, skewed, and moving-hot-key workload evidence;
+- implement fail-safe Redis/Valkey-assisted invalidation in v0.3;
+- keep RESP3, mesh, an Operator, and fleet management demand-gated.

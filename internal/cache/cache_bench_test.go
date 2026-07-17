@@ -7,9 +7,11 @@ import (
 
 func BenchmarkCacheHit(b *testing.B) {
 	c := New(1<<20, 1000, nil)
-	c.Put("key", []byte("value"), time.Minute)
+	if !c.Put("key", []byte("value"), time.Minute) {
+		b.Fatal("failed to seed cache")
+	}
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = c.Get("key")
 	}
 }
@@ -17,7 +19,7 @@ func BenchmarkCacheHit(b *testing.B) {
 func BenchmarkCacheMiss(b *testing.B) {
 	c := New(1<<20, 1000, nil)
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = c.Get("missing")
 	}
 }

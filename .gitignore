@@ -9,8 +9,8 @@ coverage.html
 .DS_Store
 .env
 slizen.toml
-slizend
-slizenctl
+/slizend
+/slizenctl
 tmp/
 benchmark-result.json
 demo-report.md

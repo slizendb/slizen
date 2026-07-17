@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.2.0 - Safe Staging Preview
+
+### Added
+
+- Bounded per-prefix `deny`, `observe`, and `cache` policies with longest-prefix matching, explicit item-size limits, and local TTL caps.
+- Privacy-safe `slizen.audit.v1` report through `/v1/audit` and `slizenctl audit`, including effective policy, hotness state, neutral recommendations, and stable reason codes.
+- Release-grade workload scenarios for uniform traffic, 80/20-like skew, 99/1-like skew, and a moving flash key, with JSON latency percentiles and runtime metadata.
+- Observe-first Kubernetes sidecar example, Helm packaging without an Operator, and a documented rollout/rollback workflow.
+- Allocation baselines for cache, hotness, and proxy hit paths.
+
+### Changed
+
+- Concurrent GET/MGET refills now use bounded cache epochs so a read overlapping a proxied write cannot restore a superseded value.
+- Ambiguous upstream write errors conservatively invalidate affected local cache entries.
+- Proxy shutdown now drains accepted handlers and connections up to a bounded deadline before force-closing them.
+- Proxy response flushes now enforce `proxy.write_timeout`; hotness window catch-up is constant-time per key and tracking eviction immediately removes any corresponding cached value.
+- Audit output reports whether limits, tracker eviction, or oversized keys made telemetry incomplete.
+- Unsupported write families are explicitly rejected and documented instead of falling through ambiguously.
+- The near-term roadmap now prioritizes safe workload evidence and direct-origin invalidation before mesh or fleet-management work.
+
+### Limitations
+
+- Single-node only; no mesh or cross-node value replication.
+- Direct writes to Redis or Valkey can remain stale until local TTL expiration; server-assisted invalidation is planned for v0.3.
+- The admin API has no built-in authentication and must remain private.
+- Kubernetes packaging does not inject sidecars or provide an Operator.
+- Developer preview; production use still requires workload-specific staging validation.
+
 ## v0.1.0 - Developer Preview
 
 ### Added

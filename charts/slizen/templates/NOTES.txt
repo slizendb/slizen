@@ -1,0 +1,17 @@
+Slizen is running in {{ .Values.mode }} mode at:
+  {{ include "slizen.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+
+{{ if .Values.metrics.enabled -}}
+The complete admin API, including metrics, is exposed through the explicitly
+enabled ClusterIP Service:
+  {{ include "slizen.fullname" . }}-metrics.{{ .Release.Namespace }}.svc:{{ .Values.metrics.service.port }}
+Restrict this Service with a NetworkPolicy; it is not a metrics-only endpoint.
+Inspect status with:
+{{ else -}}
+The admin API is bound to Pod loopback and has no Service. Inspect it with:
+{{ end -}}
+  POD=$(kubectl get pod -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} -o jsonpath='{.items[0].metadata.name}')
+  kubectl exec -n {{ .Release.Namespace }} "$POD" -c slizen -- slizenctl status
+
+Before changing an application endpoint, follow docs/STAGING_ROLLOUT.md and
+record the original Redis/Valkey endpoint for rollback.

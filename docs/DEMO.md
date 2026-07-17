@@ -1,11 +1,11 @@
 # Demo
 
-The Slizen demo is a local Docker Compose proof path for the v0.1 developer preview.
+The Slizen demo is a local Docker Compose proof path for the v0.2 developer preview.
 
 ## What The Demo Shows
 
 - Slizen can run as a Redis/Valkey RESP proxy in front of Valkey.
-- `/healthz`, `/readyz`, `/v1/status`, `/v1/hotkeys`, and `/metrics` are reachable.
+- `/healthz`, `/readyz`, `/v1/status`, `/v1/hotkeys`, `/v1/audit`, and `/metrics` are reachable.
 - A client can write and read a key through the Slizen proxy.
 - A repeated hot-key workload can produce local cache hits in `cache` mode.
 - Benchmark/report artifacts can show cache hit ratio and upstream GET reduction from real counters.

@@ -1,4 +1,5 @@
 .git
+.gocache
 bin
 dist
 tmp

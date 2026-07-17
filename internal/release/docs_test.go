@@ -25,6 +25,16 @@ func TestRedisCompatibilityDocMatchesKnownCommands(t *testing.T) {
 		"EXPIRE":     "supported",
 		"PEXPIRE":    "supported",
 		"PERSIST":    "supported",
+		"MSET":       "rejected",
+		"RENAME":     "rejected",
+		"HSET":       "rejected",
+		"HDEL":       "rejected",
+		"LPUSH":      "rejected",
+		"RPUSH":      "rejected",
+		"LPOP":       "rejected",
+		"RPOP":       "rejected",
+		"SADD":       "rejected",
+		"SREM":       "rejected",
 		"TTL":        "pass-through",
 		"PTTL":       "pass-through",
 		"EXISTS":     "pass-through",
@@ -62,6 +72,50 @@ func TestRedisCompatibilityDocMatchesKnownCommands(t *testing.T) {
 			t.Fatalf("compatibility doc missing %s", command)
 		}
 	}
+}
+
+func TestCanonicalReleaseIdentity(t *testing.T) {
+	root := repoRoot(t)
+	formerRepository := "github.com/" + "gazakov/" + "slizen"
+	formerImage := "ghcr.io/" + "gazakov/" + "slizen"
+	files := []string{
+		"go.mod",
+		"Dockerfile",
+		"README.md",
+		"README.ru.md",
+		filepath.Join(".github", "workflows", "release-image.yml"),
+		filepath.Join("charts", "slizen", "Chart.yaml"),
+		filepath.Join("charts", "slizen", "README.md"),
+		filepath.Join("charts", "slizen", "values.yaml"),
+		filepath.Join("deploy", "kubernetes", "observe-sidecar.yaml"),
+		filepath.Join("docs", "RELEASE_NOTES_v0.1.md"),
+	}
+	for _, name := range files {
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		text := string(data)
+		if strings.Contains(text, formerRepository) || strings.Contains(text, formerImage) {
+			t.Errorf("%s contains the former repository identity", name)
+		}
+	}
+
+	assertContains := func(name, want string) {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if !strings.Contains(string(data), want) {
+			t.Errorf("%s does not contain %q", name, want)
+		}
+	}
+	assertContains("go.mod", "module github.com/slizendb/slizen")
+	assertContains("Dockerfile", `org.opencontainers.image.source="https://github.com/slizendb/slizen"`)
+	assertContains(filepath.Join(".github", "workflows", "release-image.yml"), "ghcr.io/slizendb/slizen")
+	assertContains(filepath.Join("charts", "slizen", "values.yaml"), "repository: ghcr.io/slizendb/slizen")
+	assertContains(filepath.Join("deploy", "kubernetes", "observe-sidecar.yaml"), "image: ghcr.io/slizendb/slizen:0.2.0")
 }
 
 func repoRoot(t *testing.T) string {

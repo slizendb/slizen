@@ -1,13 +1,22 @@
 # Public Release Checklist
 
-Use this checklist before publishing `v0.1.0`.
+Use this checklist before publishing `v0.2.0`.
 
+The canonical identity is `github.com/slizendb/slizen` with images under
+`ghcr.io/slizendb/slizen`. The repository transfer, legacy redirect, and local
+remote were verified on 2026-07-18.
+
+- [x] Canonical public repository, Go module, and image identity resolved.
+- [ ] Immutable multi-architecture container image built and pushed to the canonical registry.
+- [ ] Helm and raw-manifest image references resolve, and the release digest is recorded.
+- [ ] GHCR package is linked to `slizendb/slizen` with intended visibility and Actions access.
 - [ ] CI green on GitHub.
-- [ ] Docker Compose smoke green.
+- [x] Docker Compose smoke green.
+- [x] Kubernetes raw manifests and Helm render validation green.
 - [ ] Demo-report artifact generated.
 - [ ] README commands verified.
-- [ ] `make release-check` green.
+- [x] `make release-check` green.
 - [ ] Version tag created.
-- [ ] Release notes pasted from `docs/RELEASE_NOTES_v0.1.md`.
+- [ ] Release notes pasted from `docs/RELEASE_NOTES_v0.2.md`.
 - [ ] Known limitations included in the GitHub Release.
 - [ ] Demo-report artifact attached if CI generated it.

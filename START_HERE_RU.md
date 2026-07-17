@@ -37,7 +37,7 @@ make demo-down
 make smoke
 ```
 
-Smoke-test поднимает Docker Compose, проверяет настоящий Valkey + настоящий `slizend`, делает SET/GET через Slizen proxy, проверяет HMAC hot-key output, Prometheus metrics, cache hits, write invalidation, unsupported command error и затем останавливает stack.
+Smoke-test поднимает Docker Compose, проверяет настоящий Valkey + настоящий `slizend`, делает SET/GET через Slizen proxy, проверяет privacy-safe `/v1/audit`, HMAC hot-key output, Prometheus metrics, cache hits, write invalidation, unsupported command error и затем останавливает stack.
 
 ## 4. Release check и demo evidence
 
@@ -47,7 +47,9 @@ make demo-report
 cat ./tmp/demo-report.md
 ```
 
-`make release-check` запускает Go checks, shell syntax checks, docs consistency checks и, если Docker доступен, `make smoke`. Без Docker он пишет предупреждение и не падает только на Docker-шаге.
+`make release-check` — строгий release gate: он требует Helm, Docker Compose, работающий Docker daemon и `jq`, запускает Go checks, shell/docs checks, Kubernetes validation, `make smoke`, а затем четыре workload-сценария на отдельном Docker Compose stack. Gate проходит только при уникальном isolated key prefix, совпадающих version/commit Slizen, известной версии origin и валидном изолированном evidence для всех четырёх сценариев. Стабильный 99/1 skew обязан показать реальные cache hits и доказанное снижение origin GET; uniform или быстро движущийся flash вправе честно показать отсутствие выигрыша. Stack всегда останавливается после проверки.
+
+Workload evidence сохраняется в `./tmp/slizen-workload-result.json`.
 
 `make demo-report` требует Docker Compose, запускает benchmark и сохраняет:
 
@@ -55,6 +57,7 @@ cat ./tmp/demo-report.md
 - `./tmp/status-before.json`
 - `./tmp/status-after.json`
 - `./tmp/hotkeys.json`
+- `./tmp/audit.json`
 - `./tmp/demo-report.md`
 
 ## 5. Режимы
@@ -72,6 +75,12 @@ SLIZEN_MODE=observe go run ./cmd/slizend --config ./slizen.example.toml
 ```
 
 В `observe` режиме Slizen не отдаёт cache hits, не coalesce-ит `GET` и не сохраняет значения.
+
+После окна наблюдения получи bounded audit без Redis values и policy prefixes:
+
+```sh
+go run ./cmd/slizenctl audit --admin http://127.0.0.1:9090
+```
 
 ## 6. Privacy
 

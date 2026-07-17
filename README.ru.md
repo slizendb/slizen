@@ -1,6 +1,6 @@
 # Slizen
 
-[![CI](https://github.com/gazakov/slizen/actions/workflows/ci.yml/badge.svg)](https://github.com/gazakov/slizen/actions/workflows/ci.yml)
+[![CI](https://github.com/slizendb/slizen/actions/workflows/ci.yml/badge.svg)](https://github.com/slizendb/slizen/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 
@@ -8,7 +8,7 @@
 
 Slizen — экспериментальный адаптивный cache-proxy для read-heavy нагрузок. Он ставится перед Redis/Valkey, измеряет температуру ключей, кэширует только разогретые значения `GET`, объединяет одновременные cache miss и инвалидирует локальные копии, когда запись проходит через proxy.
 
-Slizen v0.1 — single-node, не source of truth и поддерживает только ограниченный набор Redis-команд. Прямые записи в Redis/Valkey в обход Slizen могут оставаться stale до истечения local TTL. Admin API по умолчанию bind-ится локально и в v0.1 не имеет встроенной аутентификации.
+Slizen v0.2 — single-node, не source of truth и поддерживает только ограниченный набор Redis-команд. Прямые записи в Redis/Valkey в обход Slizen могут оставаться stale до истечения local TTL. Admin API по умолчанию bind-ится локально и в v0.2 не имеет встроенной аутентификации.
 
 ```text
 Приложение ── RESP ──> Slizen ── RESP ──> Redis / Valkey
@@ -24,7 +24,7 @@ Slizen v0.1 — single-node, не source of truth и поддерживает т
 Нужен Docker Compose.
 
 ```sh
-git clone https://github.com/gazakov/slizen.git
+git clone https://github.com/slizendb/slizen.git
 cd slizen
 make demo-up
 make demo
@@ -58,6 +58,24 @@ SLIZEN_MODE=observe go run ./cmd/slizend --config ./slizen.toml
 
 В `observe` режиме Slizen проксирует команды в origin и считает hot-key telemetry, но никогда не отдаёт local cache hit, не coalesce-ит `GET` и никогда не сохраняет значения в локальном кэше. Это режим для ответа на вопрос: какие ключи реально создают перекос нагрузки.
 
+### Cache policy по префиксам
+
+Опциональные `[[cache.policies]]` выбираются по самому длинному буквальному префиксу ключа:
+
+```toml
+[[cache.policies]]
+prefix = "session:"
+mode = "deny"
+
+[[cache.policies]]
+prefix = "catalog:"
+mode = "cache"
+max_item_bytes = 1048576
+max_local_ttl = "10s"
+```
+
+`deny` отключает локальный cache и hotness tracking, но не запрещает доступ к Redis; это не ACL. `observe` только измеряет и всегда читает upstream. `cache` включает adaptive caching и требует явные лимиты размера записи и свежего local TTL. Пустой prefix работает как catch-all, а глобальный `mode = "observe"` всегда остаётся safety ceiling и выключает локальный cache для всех правил. Конфигурация ограничена 1 024 правилами, 1 024 байтами на prefix, 262 144 байтами префиксов суммарно и 100 000 tracked keys. Redis-ключи длиннее 1 024 байт продолжают проксироваться для поддержанных команд, но не участвуют в hotness telemetry и local cache. Полный policy-контракт описан в [ADR 0004](docs/adr/0004-per-prefix-cache-policy.md).
+
 ## Docker Compose demo
 
 ```sh
@@ -73,6 +91,14 @@ make demo-down
 
 ```sh
 ./scripts/demo.sh
+```
+
+## Kubernetes staging
+
+В v0.2 есть observe-first [sidecar example](deploy/kubernetes/observe-sidecar.yaml), [standalone Helm chart](charts/slizen/README.md) без Operator и [пошаговый rollout/rollback guide](docs/STAGING_ROLLOUT.md).
+
+```sh
+make validate-k8s
 ```
 
 ## Что уже есть
@@ -96,6 +122,7 @@ make demo-down
 ```sh
 make demo-up
 make benchmark
+make benchmark-workload
 make demo-report
 cat ./tmp/demo-report.md
 make demo-down
@@ -103,11 +130,11 @@ make demo-down
 
 ## Честные ограничения
 
-Slizen v0.1 не production-ready.
+Slizen v0.2 не production-ready.
 
 - Redis или Valkey остаётся source of truth.
 - Slizen не durable database.
-- v0.1 single-node only.
+- v0.2 single-node only.
 - Mesh и репликации между Slizen-нодами пока нет.
 - Прямые записи в Redis/Valkey в обход Slizen могут оставаться stale до истечения local TTL.
 - Поддерживается только ограниченный набор Redis-команд.
@@ -120,11 +147,14 @@ curl http://127.0.0.1:9090/healthz
 curl http://127.0.0.1:9090/readyz
 curl http://127.0.0.1:9090/v1/status
 curl http://127.0.0.1:9090/v1/hotkeys
+curl http://127.0.0.1:9090/v1/audit
 curl http://127.0.0.1:9090/v1/cache
 curl http://127.0.0.1:9090/metrics
 ```
 
 Raw values никогда не попадают в логи, метрики или admin API. Hot-key output по умолчанию показывает HMAC-SHA256 identifier ключа. `privacy.key_visibility = "plain"` включай только на приватном admin listener для локальной отладки.
+
+`/v1/audit` и `slizenctl audit` выдают bounded JSON-отчёт с effective policy, recommendation и стабильными reason codes. Policy prefixes и Redis values в отчёт не попадают. `telemetry_complete=false` означает, что текущий набор обрезан лимитом отчёта, tracker уже вытеснял ключи или наблюдение ключа длиннее 1 024 байт было пропущено.
 
 ## Разработка
 
@@ -146,9 +176,10 @@ Release материалы:
 - [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 - [docs/PUBLIC_RELEASE_CHECKLIST.md](docs/PUBLIC_RELEASE_CHECKLIST.md)
 - [docs/RELEASE_NOTES_v0.1.md](docs/RELEASE_NOTES_v0.1.md)
+- [docs/RELEASE_NOTES_v0.2.md](docs/RELEASE_NOTES_v0.2.md)
 
 ## Roadmap
 
-Сначала observation mode и воспроизводимые benchmarks. Потом RESP3/server-assisted invalidation, sidecar deployment, static multi-node membership, и только после этого adaptive mesh.
+v0.2 — безопасный staging: per-prefix policies, privacy-safe hot-key audit, воспроизводимые skewed workloads, Kubernetes sidecar и Helm без Operator. v0.3 — Redis/Valkey-assisted invalidation для прямых записей в origin с fail-safe поведением. Mesh, Operator и hosted control plane остаются более поздними гипотезами и начнутся только после подтверждённого спроса реальных пользователей.
 
 Gossip не даёт write consensus. Slizen остаётся cache layer.

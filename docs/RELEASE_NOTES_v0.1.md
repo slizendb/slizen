@@ -16,7 +16,7 @@ Slizen v0.1.0 is a developer preview of a single-node adaptive cache proxy for R
 ## Quick start
 
 ```sh
-git clone https://github.com/gazakov/slizen.git
+git clone https://github.com/slizendb/slizen.git
 cd slizen
 make demo-up
 make demo
@@ -67,7 +67,7 @@ The benchmark compares direct origin GETs with Slizen cold and hot reads. It rep
 ## What is next
 
 - Keep tightening compatibility tests and documentation.
-- Add more benchmark workloads beyond one fixed hot key.
-- Add per-prefix cache policy.
-- Research RESP3 and server-assisted invalidation.
-- Consider static multi-node membership only after the single-node contract is stable.
+- Finish the privacy-safe hot-key audit and skewed workload harness.
+- Package a safe observe-first Kubernetes sidecar and Helm deployment.
+- Research and implement fail-safe Redis/Valkey-assisted invalidation after v0.2 workload evidence.
+- Consider mesh or fleet management only after real users demonstrate repeated demand.

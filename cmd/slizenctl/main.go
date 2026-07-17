@@ -20,7 +20,10 @@ import (
 	"github.com/slizendb/slizen/internal/buildinfo"
 )
 
-const defaultAdmin = "http://127.0.0.1:9090"
+const (
+	defaultAdmin              = "http://127.0.0.1:9090"
+	maxAdminJSONResponseBytes = 4 << 20
+)
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -46,6 +49,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return statusCmd(args[1:], stdout, stderr)
 	case "hotkeys":
 		return hotkeysCmd(args[1:], stdout, stderr)
+	case "audit":
+		return auditCmd(args[1:], stdout, stderr)
 	case "cache":
 		return cacheCmd(args[1:], stdout, stderr)
 	case "benchmark":
@@ -91,6 +96,9 @@ func hotkeysCmd(args []string, stdout, stderr io.Writer) error {
 	limit := fs.Int("limit", 20, "maximum hot keys")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *limit < 1 || *limit > 1000 {
+		return errors.New("limit must be between 1 and 1000")
 	}
 	value, err := httpGet(strings.TrimRight(*adminURL, "/") + "/v1/hotkeys?limit=" + strconv.Itoa(*limit))
 	return printJSON(stdout, value, err)
@@ -236,11 +244,7 @@ func httpGet(url string) (any, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("GET %s returned %s", url, resp.Status)
 	}
-	var out any
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return decodeBoundedAdminJSON(resp.Body)
 }
 
 func httpPost(url string, body []byte) (any, error) {
@@ -253,8 +257,19 @@ func httpPost(url string, body []byte) (any, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("POST %s returned %s", url, resp.Status)
 	}
+	return decodeBoundedAdminJSON(resp.Body)
+}
+
+func decodeBoundedAdminJSON(reader io.Reader) (any, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, maxAdminJSONResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxAdminJSONResponseBytes {
+		return nil, fmt.Errorf("admin JSON response exceeds %d bytes", maxAdminJSONResponseBytes)
+	}
 	var out any
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -328,5 +343,5 @@ func hitRatio(status map[string]any) float64 {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: slizenctl version|healthz|readyz|status|hotkeys|cache|benchmark|demo")
+	fmt.Fprintln(w, "usage: slizenctl version|healthz|readyz|status|hotkeys|audit|cache|benchmark|demo")
 }

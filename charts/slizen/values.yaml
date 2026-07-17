@@ -1,0 +1,142 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/slizendb/slizen
+  pullPolicy: IfNotPresent
+  # Defaults to Chart.appVersion. Pin a digest in production.
+  tag: ""
+  digest: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Observe forwards every request and records telemetry without storing or
+# serving local values. Promote selected prefixes to cache only after review.
+mode: observe
+
+upstream:
+  address: redis.default.svc.cluster.local:6379
+  database: 0
+  dialTimeout: 2s
+  readTimeout: 2s
+  writeTimeout: 2s
+  # The chart never creates or renders Redis credentials. When set, the named
+  # Secret may contain username and/or password under the configured keys.
+  existingSecret:
+    name: ""
+    usernameKey: username
+    passwordKey: password
+
+proxy:
+  readTimeout: 3s
+  writeTimeout: 3s
+  shutdownTimeout: 10s
+
+admin:
+  listen: 127.0.0.1:9090
+  # Required acknowledgement before metrics can expose the admin listener to
+  # the Pod network. Leave false to keep the default loopback-only posture.
+  allowNetworkAccess: false
+
+cache:
+  maxBytes: 67108864
+  maxEntries: 100000
+  maxLocalTTL: 30s
+  allowStaleOnUpstreamError: false
+  staleGrace: 0s
+  negativeTTL: 0s
+  # Longest literal prefix wins. Cache rules require maxItemBytes and
+  # maxLocalTTL; deny/observe rules omit both limits.
+  policies: []
+  # - prefix: "session:"
+  #   mode: deny
+  # - prefix: "catalog:"
+  #   mode: cache
+  #   maxItemBytes: 1048576
+  #   maxLocalTTL: 10s
+
+hotness:
+  window: 1s
+  ewmaAlpha: 0.5
+  promotionThreshold: 100
+  demotionThreshold: 20
+  minimumHotWindows: 2
+  cooldown: 30s
+  maxTrackedKeys: 100000
+
+privacy:
+  keyVisibility: hash
+  # Optional stable HMAC key. Without it, the Pod UID is used and anonymized
+  # key IDs change after a Pod restart. The chart does not create this Secret.
+  existingSecret:
+    name: ""
+    key: key-hash-secret
+
+logging:
+  level: info
+  format: json
+
+service:
+  type: ClusterIP
+  port: 6380
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+probes:
+  startup:
+    failureThreshold: 30
+    periodSeconds: 2
+    timeoutSeconds: 2
+  readiness:
+    failureThreshold: 3
+    periodSeconds: 5
+    timeoutSeconds: 2
+  liveness:
+    failureThreshold: 3
+    periodSeconds: 10
+    timeoutSeconds: 2
+
+# Keep this above proxy.shutdownTimeout so SIGTERM can drain connections.
+terminationGracePeriodSeconds: 30
+
+metrics:
+  # Enabling metrics requires admin.listen=0.0.0.0:9090 and an explicit
+  # admin.allowNetworkAccess=true acknowledgement. The resulting ClusterIP can
+  # reach the complete admin API, so restrict it with your own NetworkPolicy.
+  enabled: false
+  service:
+    port: 9090
+    annotations: {}
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

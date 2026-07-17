@@ -1,6 +1,6 @@
 # Security Policy
 
-Slizen v0.1 is a developer preview and does not have a production security support window yet.
+Slizen v0.2 is a developer preview and does not have a production security support window yet.
 
 ## Reporting A Vulnerability
 
@@ -12,11 +12,11 @@ Please report suspected vulnerabilities privately to the repository owner instea
 - expected and actual impact;
 - suggested mitigation, if known.
 
-## v0.1 Security Model
+## v0.2 Security Model
 
 - Redis or Valkey remains the source of truth.
 - Slizen is not a durable database and must not be used as the authoritative store for sensitive data.
-- The admin API has no built-in authentication in v0.1.
+- The admin API has no built-in authentication in v0.2.
 - Do not expose the admin endpoint to the public internet.
 - Bind the admin API to a private interface and put external auth/network policy in front of it if needed.
 

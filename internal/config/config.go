@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"strconv"
@@ -10,6 +11,15 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/slizendb/slizen/internal/cachepolicy"
+)
+
+const (
+	maxCachePolicies               = 1024
+	maxCachePolicyPrefixBytes      = 1024
+	maxCachePolicyTotalPrefixBytes = 256 * 1024
+	maxHotnessTrackedKeys          = 100000
 )
 
 type Config struct {
@@ -46,12 +56,20 @@ type UpstreamConfig struct {
 }
 
 type CacheConfig struct {
-	MaxBytes                  int64         `toml:"max_bytes"`
-	MaxEntries                int           `toml:"max_entries"`
-	MaxLocalTTL               time.Duration `toml:"max_local_ttl"`
-	AllowStaleOnUpstreamError bool          `toml:"allow_stale_on_upstream_error"`
-	StaleGrace                time.Duration `toml:"stale_grace"`
-	NegativeTTL               time.Duration `toml:"negative_ttl"`
+	MaxBytes                  int64               `toml:"max_bytes"`
+	MaxEntries                int                 `toml:"max_entries"`
+	MaxLocalTTL               time.Duration       `toml:"max_local_ttl"`
+	AllowStaleOnUpstreamError bool                `toml:"allow_stale_on_upstream_error"`
+	StaleGrace                time.Duration       `toml:"stale_grace"`
+	NegativeTTL               time.Duration       `toml:"negative_ttl"`
+	Policies                  []CachePolicyConfig `toml:"policies"`
+}
+
+type CachePolicyConfig struct {
+	Prefix       string        `toml:"prefix"`
+	Mode         string        `toml:"mode"`
+	MaxItemBytes int64         `toml:"max_item_bytes"`
+	MaxLocalTTL  time.Duration `toml:"max_local_ttl"`
 }
 
 type HotnessConfig struct {
@@ -75,7 +93,7 @@ type LoggingConfig struct {
 	Format string `toml:"format"`
 }
 
-// Default returns the documented v0.1 defaults.
+// Default returns the documented defaults.
 func Default() Config {
 	return Config{
 		Mode: "cache",
@@ -185,12 +203,20 @@ type rawUpstream struct {
 }
 
 type rawCache struct {
-	MaxBytes                  *int64  `toml:"max_bytes"`
-	MaxEntries                *int    `toml:"max_entries"`
-	MaxLocalTTL               *string `toml:"max_local_ttl"`
-	AllowStaleOnUpstreamError *bool   `toml:"allow_stale_on_upstream_error"`
-	StaleGrace                *string `toml:"stale_grace"`
-	NegativeTTL               *string `toml:"negative_ttl"`
+	MaxBytes                  *int64           `toml:"max_bytes"`
+	MaxEntries                *int             `toml:"max_entries"`
+	MaxLocalTTL               *string          `toml:"max_local_ttl"`
+	AllowStaleOnUpstreamError *bool            `toml:"allow_stale_on_upstream_error"`
+	StaleGrace                *string          `toml:"stale_grace"`
+	NegativeTTL               *string          `toml:"negative_ttl"`
+	Policies                  []rawCachePolicy `toml:"policies"`
+}
+
+type rawCachePolicy struct {
+	Prefix       *string `toml:"prefix"`
+	Mode         *string `toml:"mode"`
+	MaxItemBytes *int64  `toml:"max_item_bytes"`
+	MaxLocalTTL  *string `toml:"max_local_ttl"`
 }
 
 type rawHotness struct {
@@ -274,6 +300,29 @@ func applyRaw(cfg *Config, raw rawConfig) error {
 	}
 	if err := setDuration(raw.Cache.NegativeTTL, &cfg.Cache.NegativeTTL, "cache.negative_ttl"); err != nil {
 		return err
+	}
+	if raw.Cache.Policies != nil {
+		if len(raw.Cache.Policies) > maxCachePolicies {
+			return fmt.Errorf("cache.policies must contain at most %d entries", maxCachePolicies)
+		}
+		cfg.Cache.Policies = make([]CachePolicyConfig, len(raw.Cache.Policies))
+		for i, rawPolicy := range raw.Cache.Policies {
+			path := fmt.Sprintf("cache.policies[%d]", i)
+			if rawPolicy.Prefix == nil {
+				return fmt.Errorf("%s.prefix is required", path)
+			}
+			if rawPolicy.Mode == nil {
+				return fmt.Errorf("%s.mode is required", path)
+			}
+			policy := CachePolicyConfig{Prefix: *rawPolicy.Prefix, Mode: *rawPolicy.Mode}
+			if rawPolicy.MaxItemBytes != nil {
+				policy.MaxItemBytes = *rawPolicy.MaxItemBytes
+			}
+			if err := setDuration(rawPolicy.MaxLocalTTL, &policy.MaxLocalTTL, path+".max_local_ttl"); err != nil {
+				return err
+			}
+			cfg.Cache.Policies[i] = policy
+		}
 	}
 	if err := setDuration(raw.Hotness.Window, &cfg.Hotness.Window, "hotness.window"); err != nil {
 		return err
@@ -409,7 +458,7 @@ func Validate(cfg Config) error {
 	positiveDuration("hotness.cooldown", cfg.Hotness.Cooldown)
 
 	if cfg.Upstream.Database != 0 {
-		errs = append(errs, errors.New("upstream.database must be 0 in v0.1"))
+		errs = append(errs, errors.New("upstream.database must be 0"))
 	}
 	if cfg.Cache.MaxBytes <= 0 {
 		errs = append(errs, errors.New("cache.max_bytes must be greater than zero"))
@@ -417,13 +466,74 @@ func Validate(cfg Config) error {
 	if cfg.Cache.MaxEntries < 0 {
 		errs = append(errs, errors.New("cache.max_entries must be non-negative"))
 	}
+	policies := cfg.Cache.Policies
+	if len(policies) > maxCachePolicies {
+		errs = append(errs, fmt.Errorf("cache.policies must contain at most %d entries", maxCachePolicies))
+		policies = policies[:maxCachePolicies]
+	}
+	seenPolicyPrefixes := make(map[string]int, len(policies))
+	totalPrefixBytes := 0
+	for i, policy := range policies {
+		path := fmt.Sprintf("cache.policies[%d]", i)
+		prefixBytes := len(policy.Prefix)
+		if prefixBytes > maxCachePolicyPrefixBytes {
+			errs = append(errs, fmt.Errorf("%s.prefix must contain at most %d bytes", path, maxCachePolicyPrefixBytes))
+		}
+		if totalPrefixBytes <= maxCachePolicyTotalPrefixBytes {
+			remaining := maxCachePolicyTotalPrefixBytes - totalPrefixBytes
+			if prefixBytes > remaining {
+				totalPrefixBytes = maxCachePolicyTotalPrefixBytes + 1
+			} else {
+				totalPrefixBytes += prefixBytes
+			}
+		}
+		if _, duplicate := seenPolicyPrefixes[policy.Prefix]; duplicate {
+			errs = append(errs, fmt.Errorf("%s.prefix duplicates another policy", path))
+		} else {
+			seenPolicyPrefixes[policy.Prefix] = i
+		}
+		mode, validMode := cachepolicy.ParseMode(policy.Mode)
+		if !validMode {
+			errs = append(errs, fmt.Errorf("%s.mode must be deny, observe, or cache", path))
+			continue
+		}
+		if mode == cachepolicy.ModeCache {
+			if policy.MaxItemBytes <= 0 {
+				errs = append(errs, fmt.Errorf("%s.max_item_bytes must be greater than zero in cache mode", path))
+			} else if policy.MaxItemBytes > cfg.Cache.MaxBytes {
+				errs = append(errs, fmt.Errorf("%s.max_item_bytes must not exceed cache.max_bytes", path))
+			}
+			if policy.MaxLocalTTL <= 0 {
+				errs = append(errs, fmt.Errorf("%s.max_local_ttl must be greater than zero in cache mode", path))
+			} else if policy.MaxLocalTTL > cfg.Cache.MaxLocalTTL {
+				errs = append(errs, fmt.Errorf("%s.max_local_ttl must not exceed cache.max_local_ttl", path))
+			}
+			continue
+		}
+		if policy.MaxItemBytes != 0 || policy.MaxLocalTTL != 0 {
+			errs = append(errs, fmt.Errorf("%s cache limits must be omitted outside cache mode", path))
+		}
+	}
+	if totalPrefixBytes > maxCachePolicyTotalPrefixBytes {
+		errs = append(errs, fmt.Errorf("cache.policies prefixes must contain at most %d bytes in total", maxCachePolicyTotalPrefixBytes))
+	}
 	if cfg.Hotness.MaxTrackedKeys <= 0 {
 		errs = append(errs, errors.New("hotness.max_tracked_keys must be greater than zero"))
+	} else if cfg.Hotness.MaxTrackedKeys > maxHotnessTrackedKeys {
+		errs = append(errs, fmt.Errorf("hotness.max_tracked_keys must not exceed %d", maxHotnessTrackedKeys))
 	}
-	if cfg.Hotness.EWMAAlpha <= 0 || cfg.Hotness.EWMAAlpha > 1 {
+	if !finiteFloat(cfg.Hotness.EWMAAlpha) || cfg.Hotness.EWMAAlpha <= 0 || cfg.Hotness.EWMAAlpha > 1 {
 		errs = append(errs, errors.New("hotness.ewma_alpha must be greater than 0 and at most 1"))
 	}
-	if cfg.Hotness.PromotionThreshold <= cfg.Hotness.DemotionThreshold {
+	promotionValid := finiteFloat(cfg.Hotness.PromotionThreshold) && cfg.Hotness.PromotionThreshold > 0
+	if !promotionValid {
+		errs = append(errs, errors.New("hotness.promotion_threshold must be finite and greater than zero"))
+	}
+	demotionValid := finiteFloat(cfg.Hotness.DemotionThreshold) && cfg.Hotness.DemotionThreshold > 0
+	if !demotionValid {
+		errs = append(errs, errors.New("hotness.demotion_threshold must be finite and greater than zero"))
+	}
+	if promotionValid && demotionValid && cfg.Hotness.PromotionThreshold <= cfg.Hotness.DemotionThreshold {
 		errs = append(errs, errors.New("hotness.promotion_threshold must be greater than demotion_threshold"))
 	}
 	if cfg.Hotness.MinimumHotWindows <= 0 {
@@ -451,23 +561,28 @@ func Validate(cfg Config) error {
 	return errors.Join(errs...)
 }
 
+func finiteFloat(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
 // RedactedSummary returns values safe for startup logs.
 func RedactedSummary(cfg Config) map[string]any {
 	return map[string]any{
-		"mode":              cfg.Mode,
-		"proxy_listen":      cfg.Proxy.Listen,
-		"admin_listen":      cfg.Admin.Listen,
-		"upstream_address":  cfg.Upstream.Address,
-		"upstream_username": redactPresence(cfg.Upstream.Username),
-		"upstream_password": redactPresence(cfg.Upstream.Password),
-		"upstream_database": cfg.Upstream.Database,
-		"key_visibility":    EffectiveKeyVisibility(cfg),
-		"key_hash_secret":   redactPresence(cfg.Privacy.KeyHashSecret),
-		"cache_max_bytes":   cfg.Cache.MaxBytes,
-		"cache_max_entries": cfg.Cache.MaxEntries,
-		"cache_max_ttl":     cfg.Cache.MaxLocalTTL.String(),
-		"hotness_window":    cfg.Hotness.Window.String(),
-		"log_level":         cfg.Logging.Level,
+		"mode":               cfg.Mode,
+		"proxy_listen":       cfg.Proxy.Listen,
+		"admin_listen":       cfg.Admin.Listen,
+		"upstream_address":   cfg.Upstream.Address,
+		"upstream_username":  redactPresence(cfg.Upstream.Username),
+		"upstream_password":  redactPresence(cfg.Upstream.Password),
+		"upstream_database":  cfg.Upstream.Database,
+		"key_visibility":     EffectiveKeyVisibility(cfg),
+		"key_hash_secret":    redactPresence(cfg.Privacy.KeyHashSecret),
+		"cache_max_bytes":    cfg.Cache.MaxBytes,
+		"cache_max_entries":  cfg.Cache.MaxEntries,
+		"cache_max_ttl":      cfg.Cache.MaxLocalTTL.String(),
+		"cache_policy_count": len(cfg.Cache.Policies),
+		"hotness_window":     cfg.Hotness.Window.String(),
+		"log_level":          cfg.Logging.Level,
 	}
 }
 

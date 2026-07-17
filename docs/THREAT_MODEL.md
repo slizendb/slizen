@@ -1,6 +1,6 @@
 # Threat Model
 
-This document covers Slizen v0.1 as a single-node Redis/Valkey proxy.
+This document covers Slizen v0.2 as a single-node Redis/Valkey proxy.
 
 ## Assets
 
@@ -30,7 +30,7 @@ This document covers Slizen v0.1 as a single-node Redis/Valkey proxy.
 | Direct upstream writes cause stale reads | Documented limitation; future work covers server-assisted invalidation. |
 | Admin API exposed publicly | Default bind is localhost; docs warn against public exposure. |
 
-## Out Of Scope In v0.1
+## Out Of Scope In v0.2
 
 - TLS/mTLS termination;
 - admin authentication;

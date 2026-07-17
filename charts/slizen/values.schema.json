@@ -1,0 +1,205 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["replicaCount", "image", "mode", "upstream", "proxy", "admin", "cache", "hotness", "privacy", "logging", "service", "resources", "probes", "terminationGracePeriodSeconds", "metrics"],
+  "properties": {
+    "replicaCount": {"type": "integer", "const": 1},
+    "image": {"$ref": "#/definitions/image"},
+    "imagePullSecrets": {"type": "array", "items": {"type": "object"}},
+    "nameOverride": {"type": "string"},
+    "fullnameOverride": {"type": "string"},
+    "mode": {"type": "string", "enum": ["observe", "cache"]},
+    "upstream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "database", "dialTimeout", "readTimeout", "writeTimeout", "existingSecret"],
+      "properties": {
+        "address": {"type": "string", "minLength": 3, "pattern": "^[^:]+:[0-9]+$"},
+        "database": {"const": 0},
+        "dialTimeout": {"$ref": "#/definitions/duration"},
+        "readTimeout": {"$ref": "#/definitions/duration"},
+        "writeTimeout": {"$ref": "#/definitions/duration"},
+        "existingSecret": {"$ref": "#/definitions/credentialSecret"}
+      }
+    },
+    "proxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["readTimeout", "writeTimeout", "shutdownTimeout"],
+      "properties": {
+        "readTimeout": {"$ref": "#/definitions/duration"},
+        "writeTimeout": {"$ref": "#/definitions/duration"},
+        "shutdownTimeout": {"$ref": "#/definitions/duration"}
+      }
+    },
+    "admin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["listen", "allowNetworkAccess"],
+      "properties": {
+        "listen": {"type": "string", "enum": ["127.0.0.1:9090", "0.0.0.0:9090"]},
+        "allowNetworkAccess": {"type": "boolean"}
+      }
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxBytes", "maxEntries", "maxLocalTTL", "allowStaleOnUpstreamError", "staleGrace", "negativeTTL", "policies"],
+      "properties": {
+        "maxBytes": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "maxEntries": {"type": "integer", "minimum": 0},
+        "maxLocalTTL": {"$ref": "#/definitions/duration"},
+        "allowStaleOnUpstreamError": {"type": "boolean"},
+        "staleGrace": {"$ref": "#/definitions/durationAllowZero"},
+        "negativeTTL": {"$ref": "#/definitions/durationAllowZero"},
+        "policies": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {"$ref": "#/definitions/policy"}
+        }
+      }
+    },
+    "hotness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["window", "ewmaAlpha", "promotionThreshold", "demotionThreshold", "minimumHotWindows", "cooldown", "maxTrackedKeys"],
+      "properties": {
+        "window": {"$ref": "#/definitions/duration"},
+        "ewmaAlpha": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "promotionThreshold": {"type": "number", "exclusiveMinimum": 0},
+        "demotionThreshold": {"type": "number", "exclusiveMinimum": 0},
+        "minimumHotWindows": {"type": "integer", "minimum": 1},
+        "cooldown": {"$ref": "#/definitions/duration"},
+        "maxTrackedKeys": {"type": "integer", "minimum": 1, "maximum": 100000}
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keyVisibility", "existingSecret"],
+      "properties": {
+        "keyVisibility": {"const": "hash"},
+        "existingSecret": {"$ref": "#/definitions/keySecret"}
+      }
+    },
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "format"],
+      "properties": {
+        "level": {"type": "string", "enum": ["debug", "info", "warn", "error"]},
+        "format": {"type": "string", "enum": ["json", "text"]}
+      }
+    },
+    "service": {"$ref": "#/definitions/service"},
+    "podAnnotations": {"type": "object", "additionalProperties": {"type": "string"}},
+    "podLabels": {"type": "object", "additionalProperties": {"type": "string"}},
+    "podSecurityContext": {"type": "object"},
+    "securityContext": {"type": "object"},
+    "resources": {"type": "object"},
+    "probes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startup", "readiness", "liveness"],
+      "properties": {
+        "startup": {"$ref": "#/definitions/probe"},
+        "readiness": {"$ref": "#/definitions/probe"},
+        "liveness": {"$ref": "#/definitions/probe"}
+      }
+    },
+    "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1},
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "service", "serviceMonitor"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "service": {"$ref": "#/definitions/service"},
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "interval", "scrapeTimeout", "labels"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "interval": {"$ref": "#/definitions/duration"},
+            "scrapeTimeout": {"$ref": "#/definitions/duration"},
+            "labels": {"type": "object", "additionalProperties": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "nodeSelector": {"type": "object"},
+    "tolerations": {"type": "array"},
+    "affinity": {"type": "object"}
+  },
+  "definitions": {
+    "duration": {"type": "string", "pattern": "^[1-9][0-9]*(ns|us|ms|s|m|h)$"},
+    "durationAllowZero": {"type": "string", "pattern": "^(0|[1-9][0-9]*)(ns|us|ms|s|m|h)$"},
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "pullPolicy", "tag"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "pullPolicy": {"type": "string", "enum": ["Always", "IfNotPresent", "Never"]},
+        "tag": {"type": "string"},
+        "digest": {"type": "string", "pattern": "^$|^sha256:[a-f0-9]{64}$"}
+      }
+    },
+    "credentialSecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "usernameKey", "passwordKey"],
+      "properties": {
+        "name": {"type": "string"},
+        "usernameKey": {"type": "string", "minLength": 1},
+        "passwordKey": {"type": "string", "minLength": 1}
+      }
+    },
+    "keySecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "key"],
+      "properties": {"name": {"type": "string"}, "key": {"type": "string", "minLength": 1}}
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["port", "annotations"],
+      "properties": {
+        "type": {"type": "string", "enum": ["ClusterIP"]},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "annotations": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["failureThreshold", "periodSeconds", "timeoutSeconds"],
+      "properties": {
+        "failureThreshold": {"type": "integer", "minimum": 1},
+        "periodSeconds": {"type": "integer", "minimum": 1},
+        "timeoutSeconds": {"type": "integer", "minimum": 1}
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prefix", "mode"],
+      "properties": {
+        "prefix": {"type": "string", "maxLength": 1024},
+        "mode": {"type": "string", "enum": ["deny", "observe", "cache"]},
+        "maxItemBytes": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "maxLocalTTL": {"$ref": "#/definitions/duration"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"mode": {"const": "cache"}}},
+          "then": {"required": ["maxItemBytes", "maxLocalTTL"]},
+          "else": {"not": {"anyOf": [{"required": ["maxItemBytes"]}, {"required": ["maxLocalTTL"]}]}}
+        }
+      ]
+    }
+  }
+}

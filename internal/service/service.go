@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 
 	"github.com/slizendb/slizen/internal/cache"
+	"github.com/slizendb/slizen/internal/cachepolicy"
 	"github.com/slizendb/slizen/internal/config"
 	"github.com/slizendb/slizen/internal/hotness"
 	"github.com/slizendb/slizen/internal/metrics"
@@ -24,6 +26,15 @@ type Clock interface {
 type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now() }
+
+const cacheEpochStripeCount = 256
+
+// cacheEpochStripeState makes an epoch check plus its local-cache mutation
+// indivisible with respect to write-driven generation changes and invalidation.
+type cacheEpochStripeState struct {
+	mu    sync.Mutex
+	epoch atomic.Uint64
+}
 
 type Options struct {
 	Config   config.Config
@@ -43,6 +54,7 @@ type Service struct {
 	metrics  *metrics.Recorder
 	logger   *slog.Logger
 	clock    Clock
+	policies *cachepolicy.Matcher
 	started  time.Time
 	version  string
 	commit   string
@@ -50,6 +62,7 @@ type Service struct {
 	proxyActive atomic.Bool
 	closed      atomic.Bool
 	group       singleflight.Group
+	cacheEpochs [cacheEpochStripeCount]cacheEpochStripeState
 }
 
 type Status struct {
@@ -141,6 +154,7 @@ func New(opts Options) *Service {
 		metrics:  recorder,
 		logger:   logger,
 		clock:    clock,
+		policies: newPolicyMatcher(opts.Config),
 		started:  clock.Now(),
 		version:  version,
 		commit:   commit,
@@ -170,9 +184,12 @@ func (s *Service) Get(ctx context.Context, key string) (upstream.Value, error) {
 	if key == "" {
 		return upstream.Value{}, errors.New("key is required")
 	}
-	s.handleTransitions(s.tracker.Observe(key))
+	policy := s.policies.Match(key)
+	if policy.Mode != cachepolicy.ModeDeny {
+		s.handleTransitions(s.tracker.Observe(key))
+	}
 
-	if s.cacheEnabled() {
+	if policy.Mode == cachepolicy.ModeCache {
 		if item, ok := s.getFreshCached(key); ok {
 			s.metrics.CacheHit("GET")
 			s.observeCache()
@@ -181,33 +198,30 @@ func (s *Service) Get(ctx context.Context, key string) (upstream.Value, error) {
 	}
 	s.metrics.CacheMiss("GET")
 
-	if !s.cacheEnabled() {
+	if policy.Mode != cachepolicy.ModeCache {
 		value, err := s.fetchUpstreamGet(ctx, key)
 		s.observeCache()
 		return value, err
 	}
 
+	epoch := s.cacheEpoch(key)
 	valueAny, err, shared := s.group.Do(key, func() (any, error) {
 		value, getErr := s.fetchUpstreamGet(ctx, key)
 		if getErr != nil {
 			return upstream.Value{}, getErr
 		}
 		if !value.Exists {
-			if s.cacheEnabled() {
-				s.cache.Delete(key)
-			}
+			s.reconcileLocalIfCurrent(key, value, epoch, policy)
 			return value, nil
 		}
-		if s.cacheEnabled() && s.tracker.IsHot(key) {
-			s.storeLocal(key, value)
-		}
+		s.reconcileLocalIfCurrent(key, value, epoch, policy)
 		return value, nil
 	})
 	if shared {
 		s.metrics.Coalesced()
 	}
 	if err != nil {
-		if s.cacheEnabled() && s.cfg.Cache.AllowStaleOnUpstreamError {
+		if s.cfg.Cache.AllowStaleOnUpstreamError {
 			if item, ok := s.cache.GetStale(key, s.cfg.Cache.StaleGrace); ok {
 				return upstream.Value{Exists: true, Data: item.Value, PTTL: item.TTL}, nil
 			}
@@ -233,11 +247,19 @@ func (s *Service) MGet(ctx context.Context, keys []string) ([]upstream.Value, er
 		return out, nil
 	}
 
+	type missingRead struct {
+		position int
+		epoch    uint64
+		policy   cachepolicy.Decision
+	}
 	missingKeys := make([]string, 0, len(keys))
-	missingPositions := make([]int, 0, len(keys))
+	missingReads := make([]missingRead, 0, len(keys))
 	for i, key := range keys {
-		s.handleTransitions(s.tracker.Observe(key))
-		if s.cacheEnabled() {
+		policy := s.policies.Match(key)
+		if policy.Mode != cachepolicy.ModeDeny {
+			s.handleTransitions(s.tracker.Observe(key))
+		}
+		if policy.Mode == cachepolicy.ModeCache {
 			if item, ok := s.getFreshCached(key); ok {
 				s.metrics.CacheHit("MGET")
 				out[i] = upstream.Value{Exists: true, Data: item.Value, PTTL: item.TTL}
@@ -246,7 +268,11 @@ func (s *Service) MGet(ctx context.Context, keys []string) ([]upstream.Value, er
 		}
 		s.metrics.CacheMiss("MGET")
 		missingKeys = append(missingKeys, key)
-		missingPositions = append(missingPositions, i)
+		read := missingRead{position: i, policy: policy}
+		if policy.Mode == cachepolicy.ModeCache {
+			read.epoch = s.cacheEpoch(key)
+		}
+		missingReads = append(missingReads, read)
 	}
 
 	if len(missingKeys) == 0 {
@@ -260,12 +286,15 @@ func (s *Service) MGet(ctx context.Context, keys []string) ([]upstream.Value, er
 	values, err := s.upstream.MGet(upCtx, missingKeys)
 	s.metrics.ObserveUpstream("MGET", s.clock.Now().Sub(start), err)
 	if err != nil {
-		if s.cacheEnabled() && s.cfg.Cache.AllowStaleOnUpstreamError {
+		if s.cfg.Cache.AllowStaleOnUpstreamError {
 			staleCount := 0
 			for i, key := range missingKeys {
-				pos := missingPositions[i]
+				read := missingReads[i]
+				if read.policy.Mode != cachepolicy.ModeCache {
+					continue
+				}
 				if item, ok := s.cache.GetStale(key, s.cfg.Cache.StaleGrace); ok {
-					out[pos] = upstream.Value{Exists: true, Data: item.Value, PTTL: item.TTL}
+					out[read.position] = upstream.Value{Exists: true, Data: item.Value, PTTL: item.TTL}
 					staleCount++
 				}
 			}
@@ -277,16 +306,10 @@ func (s *Service) MGet(ctx context.Context, keys []string) ([]upstream.Value, er
 	}
 	for i, value := range values {
 		key := missingKeys[i]
-		pos := missingPositions[i]
-		out[pos] = value
-		if !value.Exists {
-			if s.cacheEnabled() {
-				s.cache.Delete(key)
-			}
-			continue
-		}
-		if s.cacheEnabled() && s.tracker.IsHot(key) {
-			s.storeLocal(key, value)
+		read := missingReads[i]
+		out[read.position] = value
+		if read.policy.Mode == cachepolicy.ModeCache {
+			s.reconcileLocalIfCurrent(key, value, read.epoch, read.policy)
 		}
 	}
 	s.observeCache()
@@ -294,18 +317,21 @@ func (s *Service) MGet(ctx context.Context, keys []string) ([]upstream.Value, er
 }
 
 func (s *Service) ExecuteWrite(ctx context.Context, command string, args []string, keys []string) (any, error) {
+	s.advanceCacheEpochs(keys)
 	start := s.clock.Now()
 	result, err := s.upstream.Do(ctx, append([]string{command}, args...)...)
 	s.metrics.ObserveUpstream(command, s.clock.Now().Sub(start), err)
+	invalidated := s.invalidateCacheKeys(keys)
+	for _, key := range keys {
+		s.group.Forget(key)
+	}
+	for range invalidated {
+		s.metrics.Invalidation("write")
+	}
+	s.observeCache()
 	if err != nil {
 		return nil, err
 	}
-	for _, key := range keys {
-		if s.cache.Delete(key) {
-			s.metrics.Invalidation("write")
-		}
-	}
-	s.observeCache()
 	return result, nil
 }
 
@@ -370,11 +396,11 @@ func (s *Service) Status(ctx context.Context) Status {
 }
 
 func (s *Service) HotKeys(limit int) []HotKey {
-	s.handleTransitions(s.tracker.Advance())
-	snapshots := s.tracker.Snapshots(limit)
+	view := s.tracker.AdvanceAndSnapshot(limit)
+	s.handleTransitions(view.Transitions)
 	visibility := config.EffectiveKeyVisibility(s.cfg)
-	out := make([]HotKey, 0, len(snapshots))
-	for _, snapshot := range snapshots {
+	out := make([]HotKey, 0, len(view.Snapshots))
+	for _, snapshot := range view.Snapshots {
 		cacheSnapshot, cached := s.cache.Inspect(snapshot.Key)
 		item := HotKey{
 			ID:            privacy.KeyIdentifier(snapshot.Key, s.cfg.Privacy.KeyHashSecret, visibility),
@@ -405,11 +431,13 @@ func (s *Service) CacheInfo() CacheInfo {
 
 func (s *Service) PurgeCache(key string) bool {
 	if key == "" {
-		s.cache.Purge()
+		s.purgeAllCache()
 		s.observeCache()
 		return true
 	}
-	ok := s.cache.Delete(key)
+	s.advanceCacheEpochs([]string{key})
+	ok := s.invalidateCacheKeys([]string{key}) > 0
+	s.group.Forget(key)
 	if ok {
 		s.metrics.Invalidation("admin_purge")
 	}
@@ -418,26 +446,132 @@ func (s *Service) PurgeCache(key string) bool {
 }
 
 func (s *Service) getFreshCached(key string) (cache.EntrySnapshot, bool) {
+	if !s.tracker.IsHot(key) {
+		s.cache.Delete(key)
+		return cache.EntrySnapshot{}, false
+	}
 	if s.cfg.Cache.AllowStaleOnUpstreamError && s.cfg.Cache.StaleGrace > 0 {
 		return s.cache.GetStale(key, 0)
 	}
 	return s.cache.Get(key)
 }
 
-func (s *Service) cacheEnabled() bool {
-	return s.cfg.Mode == "cache"
-}
-
-func (s *Service) storeLocal(key string, value upstream.Value) {
-	ttl := s.localTTL(value.PTTL)
+func (s *Service) storeLocal(key string, value upstream.Value, policy cachepolicy.Decision) {
+	if policy.MaxItemBytes <= 0 || cache.EstimateSize(key, value.Data) > policy.MaxItemBytes {
+		s.cache.Delete(key)
+		return
+	}
+	ttl := s.localTTL(value.PTTL, policy.MaxLocalTTL)
 	if ttl <= 0 {
+		s.cache.Delete(key)
 		return
 	}
 	s.cache.Put(key, value.Data, ttl)
 }
 
-func (s *Service) localTTL(upstreamTTL time.Duration) time.Duration {
+func (s *Service) reconcileLocalIfCurrent(key string, value upstream.Value, epoch uint64, policy cachepolicy.Decision) {
+	s.withCurrentCacheEpoch(key, epoch, func() {
+		if !value.Exists || !s.tracker.IsHot(key) {
+			s.cache.Delete(key)
+			return
+		}
+		s.storeLocal(key, value, policy)
+	})
+}
+
+func (s *Service) cacheEpoch(key string) uint64 {
+	return s.cacheEpochs[cacheEpochStripe(key)].epoch.Load()
+}
+
+func (s *Service) withCurrentCacheEpoch(key string, epoch uint64, mutate func()) bool {
+	stripe := &s.cacheEpochs[cacheEpochStripe(key)]
+	stripe.mu.Lock()
+	defer stripe.mu.Unlock()
+	if stripe.epoch.Load() != epoch {
+		return false
+	}
+	mutate()
+	return true
+}
+
+func (s *Service) advanceCacheEpochs(keys []string) {
+	var advanced [cacheEpochStripeCount]bool
+	for _, key := range keys {
+		stripe := cacheEpochStripe(key)
+		if advanced[stripe] {
+			continue
+		}
+		state := &s.cacheEpochs[stripe]
+		state.mu.Lock()
+		state.epoch.Add(1)
+		state.mu.Unlock()
+		advanced[stripe] = true
+	}
+}
+
+func (s *Service) invalidateCacheKeys(keys []string) int {
+	var advanced [cacheEpochStripeCount]bool
+	invalidated := 0
+	for _, key := range keys {
+		stripe := cacheEpochStripe(key)
+		state := &s.cacheEpochs[stripe]
+		state.mu.Lock()
+		if !advanced[stripe] {
+			state.epoch.Add(1)
+			advanced[stripe] = true
+		}
+		if s.cache.Delete(key) {
+			invalidated++
+		}
+		state.mu.Unlock()
+	}
+	return invalidated
+}
+
+func (s *Service) purgeAllCache() {
+	for i := range s.cacheEpochs {
+		s.cacheEpochs[i].mu.Lock()
+	}
+	defer func() {
+		for i := len(s.cacheEpochs) - 1; i >= 0; i-- {
+			s.cacheEpochs[i].mu.Unlock()
+		}
+	}()
+
+	// Purge before advancing the epochs. A refill that captured an old epoch
+	// either finishes before this critical section and is deleted, or waits for
+	// its stripe and is rejected after the epoch change. A refill that observes
+	// the new epoch is ordered after the purge and may populate normally.
+	s.cache.Purge()
+	for i := range s.cacheEpochs {
+		s.cacheEpochs[i].epoch.Add(1)
+	}
+}
+
+func cacheEpochStripe(key string) int {
+	const (
+		fnvOffset = uint32(2166136261)
+		fnvPrime  = uint32(16777619)
+	)
+	hash := fnvOffset
+	for i := 0; i < len(key); i++ {
+		hash ^= uint32(key[i])
+		hash *= fnvPrime
+	}
+	return int(hash % cacheEpochStripeCount)
+}
+
+func (s *Service) localTTL(upstreamTTL, policyMaxTTL time.Duration) time.Duration {
 	maxTTL := s.cfg.Cache.MaxLocalTTL
+	if policyMaxTTL <= 0 {
+		return 0
+	}
+	if policyMaxTTL < maxTTL {
+		maxTTL = policyMaxTTL
+	}
+	if upstreamTTL == 0 {
+		return 0
+	}
 	if upstreamTTL > 0 && upstreamTTL < maxTTL {
 		return upstreamTTL
 	}
@@ -459,6 +593,7 @@ func (s *Service) handleTransitions(transitions []hotness.Transition) {
 	}
 	_, hot := s.tracker.Stats()
 	s.metrics.SetHotKeys(hot)
+	s.metrics.ObserveHotnessOversizedDrops(s.tracker.OversizedObservationsDropped())
 }
 
 func (s *Service) observeCache() {

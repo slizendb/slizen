@@ -1,0 +1,188 @@
+# Concrete observe-first sidecar pattern. Replace the redis-cli workload with
+# your application container, but keep both containers in the same Pod and
+# point the application at 127.0.0.1:6380.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: slizen-sidecar-example
+  labels:
+    app.kubernetes.io/name: slizen-sidecar-example
+data:
+  slizen.toml: |
+    mode = "observe"
+
+    [proxy]
+    listen = "0.0.0.0:6380"
+    read_timeout = "3s"
+    write_timeout = "3s"
+    shutdown_timeout = "10s"
+
+    [admin]
+    listen = "127.0.0.1:9090"
+    expose_raw_keys = false
+
+    [upstream]
+    # Replace with the original Redis/Valkey endpoint before applying.
+    address = "redis.default.svc.cluster.local:6379"
+    database = 0
+    dial_timeout = "2s"
+    read_timeout = "2s"
+    write_timeout = "2s"
+
+    [cache]
+    max_bytes = 67108864
+    max_entries = 100000
+    max_local_ttl = "30s"
+    allow_stale_on_upstream_error = false
+    stale_grace = "0s"
+    negative_ttl = "0s"
+
+    [hotness]
+    window = "1s"
+    ewma_alpha = 0.5
+    promotion_threshold = 100
+    demotion_threshold = 20
+    minimum_hot_windows = 2
+    cooldown = "30s"
+    max_tracked_keys = 100000
+
+    [privacy]
+    key_visibility = "hash"
+
+    [logging]
+    level = "info"
+    format = "json"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slizen-sidecar-example
+  labels:
+    app.kubernetes.io/name: slizen-sidecar-example
+spec:
+  replicas: 1
+  minReadySeconds: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: slizen-sidecar-example
+  template:
+    metadata:
+      annotations:
+        # subPath ConfigMap mounts do not refresh in a running container. Bump
+        # this value on every config or policy change to roll the Pods.
+        slizen.dev/config-revision: "1"
+      labels:
+        app.kubernetes.io/name: slizen-sidecar-example
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        # Runnable compatibility canary. Replace this container with your app
+        # after its Redis command set passes the staging checks.
+        - name: example-app
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              while true; do
+                redis-cli -h 127.0.0.1 -p 6380 PING
+                sleep 10
+              done
+          env:
+            - name: REDIS_ADDRESS
+              value: 127.0.0.1:6380
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            runAsNonRoot: true
+            runAsUser: 999
+        - name: slizen
+          image: ghcr.io/slizendb/slizen:0.2.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config
+            - /etc/slizen/slizen.toml
+          env:
+            # Use a stable existing Secret in a real staging rollout. Pod UID
+            # avoids a rendered secret but changes anonymized IDs on restart.
+            - name: SLIZEN_KEY_HASH_SECRET
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          ports:
+            - name: redis
+              containerPort: 6380
+              protocol: TCP
+          startupProbe:
+            exec:
+              command:
+                - /usr/local/bin/slizenctl
+                - healthz
+                - --admin
+                - http://127.0.0.1:9090
+            failureThreshold: 30
+            periodSeconds: 2
+            timeoutSeconds: 2
+          readinessProbe:
+            exec:
+              command:
+                - /usr/local/bin/slizenctl
+                - readyz
+                - --admin
+                - http://127.0.0.1:9090
+            failureThreshold: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            exec:
+              command:
+                - /usr/local/bin/slizenctl
+                - healthz
+                - --admin
+                - http://127.0.0.1:9090
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          volumeMounts:
+            - name: slizen-config
+              mountPath: /etc/slizen/slizen.toml
+              subPath: slizen.toml
+              readOnly: true
+      volumes:
+        - name: slizen-config
+          configMap:
+            name: slizen-sidecar-example

@@ -12,6 +12,57 @@ type fakeConn struct {
 	writes []string
 }
 
+func FuzzWriteAny(f *testing.F) {
+	seeds := []struct {
+		kind    uint8
+		payload []byte
+		number  int64
+	}{
+		{kind: 0},
+		{kind: 1, payload: []byte("OK")},
+		{kind: 2, payload: []byte{0x00, 0xff, 0x80, '\r', '\n'}},
+		{kind: 3, number: -1},
+		{kind: 4, number: 42},
+		{kind: 5, number: -1},
+		{kind: 6, number: 1},
+		{kind: 7, payload: []byte("nested"), number: 2},
+		{kind: 8, payload: []byte("fallback")},
+	}
+	for _, seed := range seeds {
+		f.Add(seed.kind, seed.payload, seed.number)
+	}
+
+	f.Fuzz(func(t *testing.T, kind uint8, payload []byte, number int64) {
+		var value any
+		switch kind % 9 {
+		case 0:
+			value = nil
+		case 1:
+			value = string(payload)
+		case 2:
+			value = payload
+		case 3:
+			value = int(number)
+		case 4:
+			value = number
+		case 5:
+			value = uint64(number)
+		case 6:
+			value = number%2 == 0
+		case 7:
+			value = []interface{}{string(payload), number, nil, payload}
+		case 8:
+			value = struct{ Value string }{Value: string(payload)}
+		}
+
+		conn := &fakeConn{}
+		writeAny(conn, value)
+		if len(conn.writes) == 0 {
+			t.Fatalf("writeAny produced no response for kind %d", kind%9)
+		}
+	})
+}
+
 func (f *fakeConn) RemoteAddr() string             { return "test" }
 func (f *fakeConn) Close() error                   { return nil }
 func (f *fakeConn) WriteError(msg string)          { f.writes = append(f.writes, "-"+msg) }

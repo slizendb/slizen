@@ -1,0 +1,36 @@
+mode: cache
+
+upstream:
+  address: valkey.staging.svc.cluster.local:6379
+  existingSecret:
+    name: slizen-upstream
+    usernameKey: username
+    passwordKey: password
+
+cache:
+  maxBytes: 33554432
+  maxEntries: 20000
+  maxLocalTTL: 15s
+  policies:
+    - prefix: "session:"
+      mode: deny
+    - prefix: "catalog:"
+      mode: cache
+      maxItemBytes: 262144
+      maxLocalTTL: 5s
+
+privacy:
+  existingSecret:
+    name: slizen-privacy
+    key: key-hash-secret
+
+admin:
+  listen: 0.0.0.0:9090
+  allowNetworkAccess: true
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: prometheus

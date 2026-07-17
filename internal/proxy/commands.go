@@ -28,15 +28,19 @@ func wrongArity(name string) string {
 }
 
 func unsupported(name string) string {
-	return "ERR unsupported command '" + strings.ToLower(name) + "' in Slizen v0.1"
+	return "ERR unsupported command '" + strings.ToLower(name) + "' in Slizen"
 }
 
 func rejectedUnsafe(name string) string {
-	return "ERR command '" + strings.ToLower(name) + "' is stateful or unsafe and is not supported by Slizen v0.1"
+	return "ERR command '" + strings.ToLower(name) + "' is stateful or unsafe and is not supported by Slizen"
 }
 
 func rejectedSetGet() string {
-	return "ERR SET GET option is not supported by Slizen v0.1"
+	return "ERR SET GET option is not supported by Slizen"
+}
+
+func rejectedMutation(name string) string {
+	return "ERR mutating command '" + strings.ToLower(name) + "' is not supported by Slizen"
 }
 
 func setUsesGetOption(options []string) bool {
@@ -57,6 +61,15 @@ func isUnsafeCommand(name string) bool {
 		return true
 	default:
 		return isBlockingCommand(name)
+	}
+}
+
+func isRejectedMutation(name string) bool {
+	switch name {
+	case "MSET", "RENAME", "HSET", "HDEL", "LPUSH", "RPUSH", "LPOP", "RPOP", "SADD", "SREM":
+		return true
+	default:
+		return false
 	}
 }
 
