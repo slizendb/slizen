@@ -10,13 +10,13 @@ remote were verified on 2026-07-18.
 - [ ] Immutable multi-architecture container image built and pushed to the canonical registry.
 - [ ] Helm and raw-manifest image references resolve, and the release digest is recorded.
 - [ ] GHCR package is linked to `slizendb/slizen` with intended visibility and Actions access.
-- [ ] CI green on GitHub.
+- [x] CI green on GitHub.
 - [x] Docker Compose smoke green.
 - [x] Kubernetes raw manifests and Helm render validation green.
-- [ ] Demo-report artifact generated.
+- [x] Demo-report artifact generated.
 - [ ] README commands verified.
 - [x] `make release-check` green.
 - [ ] Version tag created.
 - [ ] Release notes pasted from `docs/RELEASE_NOTES_v0.2.md`.
 - [ ] Known limitations included in the GitHub Release.
-- [ ] Demo-report artifact attached if CI generated it.
+- [x] Demo-report artifact attached if CI generated it.
