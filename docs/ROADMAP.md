@@ -18,7 +18,7 @@ Status: released developer preview (`v0.1.0`).
 
 ## v0.2: Safe staging and workload evidence
 
-Status: implementation complete (2026-07-17); `v0.2.0` release candidate. Public CI, image publication, tag, and release publication remain pending in [PUBLIC_RELEASE_CHECKLIST.md](PUBLIC_RELEASE_CHECKLIST.md).
+Status: released developer preview (`v0.2.0`) on 2026-07-18. The completed public release evidence is recorded in [PUBLIC_RELEASE_CHECKLIST.md](PUBLIC_RELEASE_CHECKLIST.md).
 
 Included reliability work: bounded graceful proxy handler and connection drain, including forced cutoff at `proxy.shutdown_timeout`.
 
