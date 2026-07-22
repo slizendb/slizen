@@ -26,11 +26,15 @@
     "proxy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["readTimeout", "writeTimeout", "shutdownTimeout"],
+      "required": ["readTimeout", "writeTimeout", "shutdownTimeout", "maxCommandBytes", "maxCommandArgs", "maxMGetKeys", "maxConnections"],
       "properties": {
         "readTimeout": {"$ref": "#/definitions/duration"},
         "writeTimeout": {"$ref": "#/definitions/duration"},
-        "shutdownTimeout": {"$ref": "#/definitions/duration"}
+        "shutdownTimeout": {"$ref": "#/definitions/duration"},
+        "maxCommandBytes": {"type": "integer", "minimum": 1, "maximum": 16777216},
+        "maxCommandArgs": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "maxMGetKeys": {"type": "integer", "minimum": 1, "maximum": 2048},
+        "maxConnections": {"type": "integer", "minimum": 1, "maximum": 10000}
       }
     },
     "admin": {
@@ -52,7 +56,7 @@
         "maxLocalTTL": {"$ref": "#/definitions/duration"},
         "allowStaleOnUpstreamError": {"type": "boolean"},
         "staleGrace": {"$ref": "#/definitions/durationAllowZero"},
-        "negativeTTL": {"$ref": "#/definitions/durationAllowZero"},
+        "negativeTTL": {"const": "0s"},
         "policies": {
           "type": "array",
           "maxItems": 1024,

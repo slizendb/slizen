@@ -34,6 +34,30 @@ Release gate: a team unfamiliar with Slizen can place it in front of a staging R
 
 Customer discovery runs in parallel with v0.2. Product validation targets are defined in [VALIDATION_PLAN.md](VALIDATION_PLAN.md); they are business evidence, not software release requirements.
 
+## v0.2.1: Launch hardening
+
+Status: in progress. The release candidate is being validated; no `v0.2.1` tag or public image is recorded as complete yet. v0.2.0 remains the released developer preview above.
+
+Implemented in the release candidate:
+
+- [x] Observe-first defaults and an explicit empty-prefix safety catch-all for selective cache promotion.
+- [x] Random process-local HMAC secret when an operator does not configure a stable one.
+- [x] Configurable, hard-capped RESP request and connection admission limits with the parser-level limitation documented.
+- [x] Stale-grace retention that is not destroyed by cache metrics or inspection.
+- [x] O(1) hot-key summary counters on the request/status path.
+- [x] Key-specific workload value verification with mismatch-invalidated evidence.
+- [x] Canonical licensing, pinned release inputs and Actions, dependency update automation, GitHub-native OCI provenance, and evidence generated from the exact image digest.
+- [x] GHCR-first install docs, honest v0.2.0 evidence language, and design-partner intake.
+
+Release closure:
+
+- [ ] Run the complete release gate from the intended clean commit.
+- [ ] Confirm public CI and immutable-image evidence are green.
+- [ ] Publish and verify the `v0.2.1` tag, GitHub Release, GHCR digest, provenance, and attached evidence.
+- [ ] Enable the repository security and branch rules listed in [PUBLIC_RELEASE_CHECKLIST.md](PUBLIC_RELEASE_CHECKLIST.md).
+
+Release gate: safe defaults and bounded failure behavior survive unit, race, integration, Docker, Kubernetes, and workload validation, and every public evidence artifact resolves to one full commit and immutable image digest.
+
 ## v0.3: Direct-origin invalidation safety
 
 Status: planned.

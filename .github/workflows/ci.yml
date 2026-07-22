@@ -2,14 +2,20 @@ name: ci
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
     services:
       valkey:
-        image: valkey/valkey:8-alpine
+        image: valkey/valkey:8-alpine@sha256:a038175878d66b9d274fbf8be73c0305e93798b83917647f167e18cef3c71eec
         ports:
           - 6379:6379
         options: >-
@@ -18,8 +24,8 @@ jobs:
           --health-timeout 1s
           --health-retries 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
@@ -34,12 +40,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.18.4
       - name: Download modules
@@ -47,7 +53,7 @@ jobs:
       - name: Release check
         run: make release-check
       - name: Upload release workload evidence
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: slizen-release-workload-result
@@ -57,8 +63,8 @@ jobs:
   vulnerability-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
@@ -70,8 +76,8 @@ jobs:
   kubernetes-packaging:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.18.4
       - name: Validate Kubernetes manifests and Helm chart
@@ -81,7 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       valkey:
-        image: valkey/valkey:8-alpine
+        image: valkey/valkey:8-alpine@sha256:a038175878d66b9d274fbf8be73c0305e93798b83917647f167e18cef3c71eec
         ports:
           - 6379:6379
         options: >-
@@ -90,8 +96,8 @@ jobs:
           --health-timeout 1s
           --health-retries 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
@@ -111,8 +117,9 @@ jobs:
           SLIZEN_UPSTREAM_ADDRESS=127.0.0.1:6379 \
           SLIZEN_PROXY_LISTEN=127.0.0.1:6380 \
           SLIZEN_ADMIN_LISTEN=127.0.0.1:9090 \
+          SLIZEN_MODE=cache \
           SLIZEN_LOG_LEVEL=warn \
-            /tmp/slizend > /tmp/slizend.log 2>&1 &
+            /tmp/slizend --config ./slizen.example.toml > /tmp/slizend.log 2>&1 &
           slizend_pid=$!
           trap 'kill "${slizend_pid}" 2>/dev/null || true; wait "${slizend_pid}" 2>/dev/null || true; cat /tmp/slizend.log' EXIT
 
@@ -147,7 +154,7 @@ jobs:
             --origin 127.0.0.1:6379 \
             --admin http://127.0.0.1:9090 \
             --scenario all \
-            --key-prefix slizen:ci:integration \
+            --key-prefix product:slizen:ci:integration \
             --keys 100 \
             --value-size 128 \
             --read-ratio 95 \
@@ -158,7 +165,7 @@ jobs:
             --flash-every 40000 \
             --output json \
             --json-file /tmp/slizen-workload-result.json
-          jq -e --arg key_prefix "slizen:ci:integration" '
+          jq -e --arg key_prefix "product:slizen:ci:integration" '
             def known_version:
               type == "string" and length > 0 and ascii_downcase != "unknown";
             .name == "Slizen Release Workload Benchmark"
@@ -171,6 +178,12 @@ jobs:
             and ((.scenarios | map(.name) | sort) == ["moving-flash", "skew-80-20", "skew-99-1", "uniform"])
             and all(.scenarios[];
               .evidence_valid == true
+              and .origin.value_mismatches == 0
+              and .slizen.value_mismatches == 0
+              and .origin.validation_failures == 0
+              and .slizen.validation_failures == 0
+              and .origin.validation_mismatches == 0
+              and .slizen.validation_mismatches == 0
               and (.slizen.cache_hits | type == "number")
               and (.cache_hit_ratio_percent | type == "number")
               and (.origin_get_reduction_percent | type == "number")
@@ -184,7 +197,7 @@ jobs:
             )
           ' /tmp/slizen-workload-result.json >/dev/null
       - name: Upload benchmark artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: slizen-benchmark-result
@@ -212,7 +225,7 @@ jobs:
           BENCHMARK_REQUESTS=5000 \
             make demo-report
       - name: Upload demo report artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: slizen-demo-report

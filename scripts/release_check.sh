@@ -35,7 +35,7 @@ check_make_targets_in_docs() {
 
 release_commit() {
   local commit
-  commit="$(git rev-parse --short HEAD 2>/dev/null || true)"
+  commit="$(git rev-parse HEAD 2>/dev/null || true)"
   [[ -n "${commit}" ]] || commit="unknown"
   if [[ -n "$(git status --porcelain --untracked-files=normal 2>/dev/null || true)" ]]; then
     commit="${commit}-dirty"
@@ -84,6 +84,12 @@ validate_workload_evidence() {
     and ((.scenarios | map(.name) | sort) == ["moving-flash", "skew-80-20", "skew-99-1", "uniform"])
     and all(.scenarios[];
       .evidence_valid == true
+      and .origin.value_mismatches == 0
+      and .slizen.value_mismatches == 0
+      and .origin.validation_failures == 0
+      and .slizen.validation_failures == 0
+      and .origin.validation_mismatches == 0
+      and .slizen.validation_mismatches == 0
       and (.slizen.cache_hits | type == "number")
       and (.cache_hit_ratio_percent | type == "number")
       and (.origin_get_reduction_percent | type == "number")
@@ -130,7 +136,7 @@ docker info >/dev/null 2>&1 || {
 }
 
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-slizen-release-check-$$}"
-export SLIZEN_VERSION="${SLIZEN_VERSION:-0.2.0}"
+export SLIZEN_VERSION="${SLIZEN_VERSION:-0.2.1}"
 export SLIZEN_COMMIT="${SLIZEN_COMMIT:-$(release_commit)}"
 export SLIZEN_VALKEY_PORT="${SLIZEN_VALKEY_PORT:-16379}"
 export SLIZEN_PROXY_PORT="${SLIZEN_PROXY_PORT:-16380}"
@@ -138,7 +144,7 @@ export SLIZEN_ADMIN_PORT="${SLIZEN_ADMIN_PORT:-19090}"
 export ADMIN_URL="${ADMIN_URL:-http://127.0.0.1:${SLIZEN_ADMIN_PORT}}"
 PROXY_ADDR="${PROXY_ADDR:-127.0.0.1:${SLIZEN_PROXY_PORT}}"
 ORIGIN_ADDR="${ORIGIN_ADDR:-127.0.0.1:${SLIZEN_VALKEY_PORT}}"
-WORKLOAD_KEY_PREFIX="slizen:release:v0.2"
+WORKLOAD_KEY_PREFIX="product:slizen:release:v${SLIZEN_VERSION}"
 WORKLOAD_RESULT="./tmp/slizen-workload-result.json"
 trap cleanup_release_stack_best_effort EXIT
 
@@ -152,6 +158,9 @@ bash -n scripts/release_check.sh
 bash -n scripts/validate_k8s.sh
 if [[ -f scripts/demo_report.sh ]]; then
   bash -n scripts/demo_report.sh
+fi
+if [[ -f scripts/release_evidence.sh ]]; then
+  bash -n scripts/release_evidence.sh
 fi
 
 step "documentation make targets"
@@ -176,12 +185,12 @@ go run -ldflags "-X github.com/slizendb/slizen/internal/buildinfo.Version=${SLIZ
   --admin "${ADMIN_URL}" \
   --scenario all \
   --key-prefix "${WORKLOAD_KEY_PREFIX}" \
-  --keys 100 \
+  --keys 1000 \
   --value-size 128 \
   --read-ratio 95 \
-  --concurrency 8 \
-  --duration 5s \
-  --requests 200000 \
+  --concurrency 32 \
+  --duration 10s \
+  --requests 1000000 \
   --seed 42 \
   --flash-every 40000 \
   --output text \

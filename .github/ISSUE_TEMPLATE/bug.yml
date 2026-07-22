@@ -1,0 +1,51 @@
+name: Bug report
+description: Report reproducible incorrect behavior in the Slizen developer preview.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include passwords, Redis values, sensitive keys, or vulnerability details. Use the private security-report link for security issues.
+  - type: input
+    id: version
+    attributes:
+      label: Slizen version and commit
+      placeholder: "0.2.1 (full commit SHA)"
+    validations:
+      required: true
+  - type: dropdown
+    id: origin
+    attributes:
+      label: Origin
+      options:
+        - Valkey
+        - Redis
+        - Other Redis-compatible server
+    validations:
+      required: true
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Redacted configuration and deployment
+      description: Include mode, relevant policy limits, and deployment shape without secrets or raw sensitive keys.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: List exact commands and the smallest workload that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Add relevant logs, metrics, or benchmark JSON after removing values, credentials, and sensitive keys.

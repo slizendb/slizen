@@ -16,6 +16,10 @@ data:
     read_timeout = "3s"
     write_timeout = "3s"
     shutdown_timeout = "10s"
+    max_command_bytes = 1048576
+    max_command_args = 1024
+    max_mget_keys = 512
+    max_connections = 1024
 
     [admin]
     listen = "127.0.0.1:9090"
@@ -35,7 +39,14 @@ data:
     max_local_ttl = "30s"
     allow_stale_on_upstream_error = false
     stale_grace = "0s"
+    # Reserved for a later release; non-zero values are rejected.
     negative_ttl = "0s"
+
+    # Keep this catch-all when changing the global mode to "cache" so only
+    # explicitly promoted longer prefixes can cache.
+    [[cache.policies]]
+    prefix = ""
+    mode = "observe"
 
     [hotness]
     window = "1s"
@@ -89,7 +100,7 @@ spec:
         # Runnable compatibility canary. Replace this container with your app
         # after its Redis command set passes the staging checks.
         - name: example-app
-          image: redis:7-alpine
+          image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
           imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
@@ -117,18 +128,11 @@ spec:
             runAsNonRoot: true
             runAsUser: 999
         - name: slizen
-          image: ghcr.io/slizendb/slizen:0.2.0
+          image: ghcr.io/slizendb/slizen:0.2.1
           imagePullPolicy: IfNotPresent
           args:
             - --config
             - /etc/slizen/slizen.toml
-          env:
-            # Use a stable existing Secret in a real staging rollout. Pod UID
-            # avoids a rendered secret but changes anonymized IDs on restart.
-            - name: SLIZEN_KEY_HASH_SECRET
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.uid
           ports:
             - name: redis
               containerPort: 6380

@@ -35,6 +35,7 @@ func TestValidateWorkloadConfig(t *testing.T) {
 		{name: "too few keys for 80/20", change: func(cfg *workloadConfig) { cfg.Scenario = workloadScenarioSkew80; cfg.KeyCount = 4 }},
 		{name: "too many keys", change: func(cfg *workloadConfig) { cfg.KeyCount = maxWorkloadKeys + 1 }},
 		{name: "empty value", change: func(cfg *workloadConfig) { cfg.ValueSize = 0 }},
+		{name: "value too small for version evidence", change: func(cfg *workloadConfig) { cfg.ValueSize = minWorkloadValueBytes - 1 }},
 		{name: "large value", change: func(cfg *workloadConfig) { cfg.ValueSize = maxWorkloadValueBytes + 1 }},
 		{name: "large aggregate dataset", change: func(cfg *workloadConfig) { cfg.KeyCount = maxWorkloadKeys; cfg.ValueSize = maxWorkloadValueBytes }},
 		{name: "zero reads", change: func(cfg *workloadConfig) { cfg.ReadRatio = 0 }},
@@ -204,6 +205,51 @@ func TestSummarizeWorkloadScenarioMath(t *testing.T) {
 	if invalidStatus.OriginGETReductionPercent != 0 || invalidStatus.CacheHitRatioPercent != 0 || invalidStatus.EvidenceValid || invalidStatus.ProvedOriginGETReduction {
 		t.Fatalf("invalid status delta produced reduction evidence: %+v", invalidStatus)
 	}
+
+	mismatched := slizen
+	mismatched.ValueMismatches = 1
+	mismatchResult := summarizeWorkloadScenario(workloadScenarioSkew80, origin, mismatched, true)
+	if mismatchResult.EvidenceValid || mismatchResult.ProvedOriginGETReduction {
+		t.Fatalf("value mismatch produced valid evidence: %+v", mismatchResult)
+	}
+}
+
+func TestWorkloadValuesAreKeyAndVersionSpecificAndDetectCorruption(t *testing.T) {
+	values := newWorkloadValues([]string{"key:0", "key:1"}, 97)
+	first := values.Fill(0, 0, nil)
+	second := values.Fill(1, 0, nil)
+	updated := values.Fill(0, 1, nil)
+	if len(first) != 97 || len(second) != 97 {
+		t.Fatalf("value lengths = %d and %d, want 97", len(first), len(second))
+	}
+	if string(first) == string(second) {
+		t.Fatal("different keys received identical benchmark values")
+	}
+	if string(first) == string(updated) {
+		t.Fatal("different write versions received identical benchmark values")
+	}
+	if !values.Matches(0, 0, first) || !values.Matches(1, 0, second) || !values.Matches(0, 1, updated) {
+		t.Fatal("generated benchmark value did not validate")
+	}
+	if values.Matches(0, 1, first) {
+		t.Fatal("stale write generation validated as the current value")
+	}
+	corrupted := append([]byte(nil), first...)
+	corrupted[len(corrupted)/2] ^= 0xff
+	if values.Matches(0, 0, corrupted) {
+		t.Fatal("corrupted benchmark value validated")
+	}
+	if values.Matches(0, 0, first[:len(first)-1]) {
+		t.Fatal("truncated benchmark value validated")
+	}
+}
+
+func TestHotKeyReductionRejectsValueMismatch(t *testing.T) {
+	origin := benchmarkPhase{Requests: 100, UpstreamGETs: 100}
+	hot := benchmarkPhase{Requests: 100, UpstreamGETs: 10, ValueMismatches: 1}
+	if reduction := upstreamReduction(origin, hot); reduction != 0 {
+		t.Fatalf("reduction with value mismatch = %v, want 0", reduction)
+	}
 }
 
 func TestWorkloadBenchmarkJSONContainsReleaseEvidence(t *testing.T) {
@@ -231,6 +277,9 @@ func TestWorkloadBenchmarkJSONContainsReleaseEvidence(t *testing.T) {
 		`"origin_get_reduction_percent"`,
 		`"cache_hit_ratio_percent"`,
 		`"evidence_valid"`,
+		`"value_mismatches"`,
+		`"validation_reads"`,
+		`"validation_mismatches"`,
 	} {
 		if !strings.Contains(string(data), field) {
 			t.Fatalf("JSON missing %s: %s", field, data)

@@ -25,7 +25,8 @@ helm upgrade --install slizen ./charts/slizen \
 ```
 
 For stable anonymized key IDs, set `privacy.existingSecret.name`. Without it,
-Slizen safely uses the Pod UID as the HMAC key, so IDs change after restarts.
+Slizen generates a cryptographically random process-local HMAC secret; the
+secret is never logged and IDs intentionally change after restarts.
 
 Prometheus support is opt-in because Slizen currently serves metrics and admin
 routes on one listener. Enabling it requires `admin.listen=0.0.0.0:9090` and

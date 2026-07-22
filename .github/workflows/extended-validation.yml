@@ -1,0 +1,105 @@
+name: extended-validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  high-cardinality-benchmarks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run 100k-cardinality benchmarks
+        run: |
+          mkdir -p tmp
+          go test ./internal/cache ./internal/hotness ./internal/service \
+            -run '^$' \
+            -bench 'Benchmark(CacheStats|HotnessStats|HotnessObservationAtCapacityChurn|MGetTrackedKeyCardinality)$' \
+            -benchmem \
+            -count 5 2>&1 | tee tmp/high-cardinality-benchmarks.txt
+      - name: Upload benchmark output
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: high-cardinality-benchmarks-${{ github.sha }}
+          path: tmp/high-cardinality-benchmarks.txt
+          if-no-files-found: ignore
+
+  workload-100k:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SLIZEN_VERSION: extended-validation
+      SLIZEN_COMMIT: ${{ github.sha }}
+      SLIZEN_VALKEY_PORT: "16379"
+      SLIZEN_PROXY_PORT: "16380"
+      SLIZEN_ADMIN_PORT: "19090"
+      ADMIN_URL: http://127.0.0.1:19090
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Start isolated stack
+        run: docker compose up --build -d
+      - name: Run 100k-key workload
+        run: |
+          trap 'docker compose down --remove-orphans' EXIT
+          for _ in $(seq 1 60); do
+            if curl -fsS "${ADMIN_URL}/readyz" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS "${ADMIN_URL}/readyz"
+          mkdir -p tmp
+          go run -ldflags "-X github.com/slizendb/slizen/internal/buildinfo.Version=${SLIZEN_VERSION} -X github.com/slizendb/slizen/internal/buildinfo.Commit=${SLIZEN_COMMIT}" ./cmd/slizenctl benchmark workload \
+            --proxy 127.0.0.1:16380 \
+            --origin 127.0.0.1:16379 \
+            --admin "${ADMIN_URL}" \
+            --scenario all \
+            --key-prefix "product:slizen:extended:${GITHUB_RUN_ID}" \
+            --keys 100000 \
+            --value-size 128 \
+            --read-ratio 95 \
+            --concurrency 128 \
+            --duration 30s \
+            --requests 1000000 \
+            --seed 42 \
+            --flash-every 200000 \
+            --output text \
+            --json-file tmp/extended-workload-result.json
+          jq -e '
+            .runtime_versions.slizen == "extended-validation"
+            and .runtime_versions.slizen_commit == env.GITHUB_SHA
+            and (.scenarios | length == 4)
+            and all(.scenarios[];
+              .evidence_valid == true
+              and .origin.failures == 0
+              and .slizen.failures == 0
+              and .origin.value_mismatches == 0
+              and .slizen.value_mismatches == 0
+              and .origin.validation_failures == 0
+              and .slizen.validation_failures == 0
+              and .origin.validation_mismatches == 0
+              and .slizen.validation_mismatches == 0
+            )
+          ' tmp/extended-workload-result.json >/dev/null
+      - name: Stop stack after an earlier failure
+        if: failure()
+        run: docker compose down --remove-orphans
+      - name: Upload workload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: extended-workload-${{ github.sha }}
+          path: tmp/extended-workload-result.json
+          if-no-files-found: ignore

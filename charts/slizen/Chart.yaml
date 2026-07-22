@@ -2,8 +2,8 @@ apiVersion: v2
 name: slizen
 description: Observe-first Slizen proxy for Redis and Valkey staging workloads
 type: application
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.2.1
+appVersion: "0.2.1"
 kubeVersion: ">=1.25.0-0"
 home: https://github.com/slizendb/slizen
 sources:

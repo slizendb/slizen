@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ func TestDrainDeadlineUnblocksBlockedConnectionWrite(t *testing.T) {
 		_ = clientConn.Close()
 	})
 	tracker := newDrainTracker()
-	accepted, err := tracker.accept(serverConn, time.Hour)
+	accepted, err := tracker.accept(serverConn, time.Hour, 1)
 	if err != nil || !accepted {
 		t.Fatalf("accept = %t, %v", accepted, err)
 	}
@@ -79,7 +80,7 @@ func TestNormalResponseWriteDeadlineUnblocksNonReadingClient(t *testing.T) {
 		_ = clientConn.Close()
 	})
 	tracker := newDrainTracker()
-	accepted, err := tracker.accept(serverConn, time.Hour)
+	accepted, err := tracker.accept(serverConn, time.Hour, 1)
 	if err != nil || !accepted {
 		t.Fatalf("accept = %t, %v", accepted, err)
 	}
@@ -104,4 +105,33 @@ func TestNormalResponseWriteDeadlineUnblocksNonReadingClient(t *testing.T) {
 		t.Fatal("proxy.write_timeout did not unblock the response write")
 	}
 	tracker.connectionClosed(serverConn)
+}
+
+func TestDrainRejectsConnectionsAtConfiguredLimit(t *testing.T) {
+	firstServer, firstClient := net.Pipe()
+	secondServer, secondClient := net.Pipe()
+	t.Cleanup(func() {
+		_ = firstServer.Close()
+		_ = firstClient.Close()
+		_ = secondServer.Close()
+		_ = secondClient.Close()
+	})
+
+	tracker := newDrainTracker()
+	accepted, err := tracker.accept(firstServer, time.Hour, 1)
+	if err != nil || !accepted {
+		t.Fatalf("first accept = %t, %v", accepted, err)
+	}
+	accepted, err = tracker.accept(secondServer, time.Hour, 1)
+	var limitErr connectionLimitError
+	if accepted || !errors.As(err, &limitErr) {
+		t.Fatalf("second accept = %t, %v; want connection limit", accepted, err)
+	}
+
+	tracker.connectionClosed(firstServer)
+	accepted, err = tracker.accept(secondServer, time.Hour, 1)
+	if err != nil || !accepted {
+		t.Fatalf("accept after close = %t, %v", accepted, err)
+	}
+	tracker.connectionClosed(secondServer)
 }

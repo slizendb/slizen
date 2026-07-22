@@ -19,6 +19,10 @@ listen = "127.0.0.1:6380"
 read_timeout = "4s"
 write_timeout = "5s"
 shutdown_timeout = "6s"
+max_command_bytes = 65536
+max_command_args = 64
+max_mget_keys = 32
+max_connections = 128
 
 [admin]
 listen = "127.0.0.1:9090"
@@ -66,16 +70,26 @@ format = "text"
 	if cfg.Proxy.ReadTimeout != 4*time.Second {
 		t.Fatalf("read timeout = %s", cfg.Proxy.ReadTimeout)
 	}
+	if cfg.Proxy.MaxCommandBytes != 65536 || cfg.Proxy.MaxCommandArgs != 64 || cfg.Proxy.MaxMGetKeys != 32 || cfg.Proxy.MaxConnections != 128 {
+		t.Fatalf("proxy bounds not loaded: %+v", cfg.Proxy)
+	}
 	if !cfg.Admin.ExposeRawKeys {
 		t.Fatal("expected raw key exposure from config")
 	}
 	if cfg.Cache.MaxBytes != 1024 {
 		t.Fatalf("cache max bytes = %d", cfg.Cache.MaxBytes)
 	}
+	if cfg.Privacy.KeyHashSecret != "test" {
+		t.Fatalf("stable hash secret override = %q, want configured value", cfg.Privacy.KeyHashSecret)
+	}
 }
 
 func TestEnvironmentOverrides(t *testing.T) {
 	t.Setenv("SLIZEN_MODE", "observe")
+	t.Setenv("SLIZEN_PROXY_MAX_COMMAND_BYTES", "131072")
+	t.Setenv("SLIZEN_PROXY_MAX_COMMAND_ARGS", "128")
+	t.Setenv("SLIZEN_PROXY_MAX_MGET_KEYS", "64")
+	t.Setenv("SLIZEN_PROXY_MAX_CONNECTIONS", "256")
 	t.Setenv("SLIZEN_UPSTREAM_ADDRESS", "redis.internal:6379")
 	t.Setenv("SLIZEN_UPSTREAM_USERNAME", "user")
 	t.Setenv("SLIZEN_UPSTREAM_PASSWORD", "secret")
@@ -93,6 +107,9 @@ func TestEnvironmentOverrides(t *testing.T) {
 	if cfg.Mode != "observe" {
 		t.Fatalf("mode override not applied: %s", cfg.Mode)
 	}
+	if cfg.Proxy.MaxCommandBytes != 131072 || cfg.Proxy.MaxCommandArgs != 128 || cfg.Proxy.MaxMGetKeys != 64 || cfg.Proxy.MaxConnections != 256 {
+		t.Fatalf("proxy bound overrides not applied: %+v", cfg.Proxy)
+	}
 	if cfg.Upstream.Username != "user" || cfg.Upstream.Password != "secret" {
 		t.Fatal("credential override not applied")
 	}
@@ -101,6 +118,42 @@ func TestEnvironmentOverrides(t *testing.T) {
 	}
 	if cfg.Logging.Level != "warn" {
 		t.Fatalf("log level override not applied: %s", cfg.Logging.Level)
+	}
+}
+
+func TestDefaultsAreObserveFirstWithEphemeralHashSecret(t *testing.T) {
+	first := Default()
+	second := Default()
+	if first.Mode != "observe" {
+		t.Fatalf("default mode = %q, want observe", first.Mode)
+	}
+	if first.Privacy.KeyHashSecret == "" || second.Privacy.KeyHashSecret == "" {
+		t.Fatal("default hash secret must be generated")
+	}
+	if first.Privacy.KeyHashSecret == second.Privacy.KeyHashSecret {
+		t.Fatal("default hash secret must be process-local and independently generated")
+	}
+	if strings.Contains(fmt.Sprint(RedactedSummary(first)), first.Privacy.KeyHashSecret) {
+		t.Fatal("startup summary leaked generated hash secret")
+	}
+}
+
+func TestPublicExampleIsObserveFirstAndSafeForSelectivePromotion(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "slizen.example.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mode != "observe" {
+		t.Fatalf("example mode = %q, want observe", cfg.Mode)
+	}
+	if len(cfg.Cache.Policies) != 2 || cfg.Cache.Policies[0].Prefix != "" || cfg.Cache.Policies[0].Mode != "observe" {
+		t.Fatalf("example catch-all policy = %+v, want empty-prefix observe", cfg.Cache.Policies)
+	}
+	if cfg.Cache.Policies[1].Prefix != "product:" || cfg.Cache.Policies[1].Mode != "cache" {
+		t.Fatalf("example promoted policy = %+v, want product cache", cfg.Cache.Policies[1])
+	}
+	if cfg.Privacy.KeyHashSecret == "" || cfg.Privacy.KeyHashSecret == "change-me" {
+		t.Fatal("example did not receive a safe process-local hash secret")
 	}
 }
 
@@ -136,12 +189,56 @@ func TestEnvironmentOverrideRejectsInvalidBool(t *testing.T) {
 	}
 }
 
+func TestEnvironmentOverrideRejectsInvalidInteger(t *testing.T) {
+	t.Setenv("SLIZEN_PROXY_MAX_CONNECTIONS", "many")
+
+	if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "SLIZEN_PROXY_MAX_CONNECTIONS") {
+		t.Fatalf("Load error = %v, want invalid integer override", err)
+	}
+}
+
+func TestValidationBoundsProxyRequestsAndConnections(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*Config)
+		want string
+	}{
+		{name: "command bytes zero", edit: func(cfg *Config) { cfg.Proxy.MaxCommandBytes = 0 }, want: "proxy.max_command_bytes"},
+		{name: "command bytes above cap", edit: func(cfg *Config) { cfg.Proxy.MaxCommandBytes = maxProxyCommandBytes + 1 }, want: "proxy.max_command_bytes"},
+		{name: "arguments zero", edit: func(cfg *Config) { cfg.Proxy.MaxCommandArgs = 0 }, want: "proxy.max_command_args"},
+		{name: "arguments above cap", edit: func(cfg *Config) { cfg.Proxy.MaxCommandArgs = maxProxyCommandArgs + 1 }, want: "proxy.max_command_args"},
+		{name: "mget keys zero", edit: func(cfg *Config) { cfg.Proxy.MaxMGetKeys = 0 }, want: "proxy.max_mget_keys"},
+		{name: "mget keys above cap", edit: func(cfg *Config) { cfg.Proxy.MaxMGetKeys = maxProxyMGetKeys + 1 }, want: "proxy.max_mget_keys"},
+		{name: "mget keys consume all arguments", edit: func(cfg *Config) { cfg.Proxy.MaxCommandArgs = 8; cfg.Proxy.MaxMGetKeys = 8 }, want: "must be less than"},
+		{name: "connections zero", edit: func(cfg *Config) { cfg.Proxy.MaxConnections = 0 }, want: "proxy.max_connections"},
+		{name: "connections above cap", edit: func(cfg *Config) { cfg.Proxy.MaxConnections = maxProxyConnections + 1 }, want: "proxy.max_connections"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.edit(&cfg)
+			err := Validate(cfg)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("validation error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestValidationRejectsBadThresholds(t *testing.T) {
 	cfg := Default()
 	cfg.Hotness.PromotionThreshold = 1
 	cfg.Hotness.DemotionThreshold = 1
 	if err := Validate(cfg); err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+func TestValidationRejectsUnsupportedNegativeCaching(t *testing.T) {
+	cfg := Default()
+	cfg.Cache.NegativeTTL = time.Second
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "negative_ttl is reserved") {
+		t.Fatalf("validation error = %v, want reserved negative TTL error", err)
 	}
 }
 

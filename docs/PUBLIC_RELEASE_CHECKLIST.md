@@ -24,3 +24,21 @@ to index digest
 - [x] Release notes pasted from `docs/RELEASE_NOTES_v0.2.md`.
 - [x] Known limitations included in the GitHub Release.
 - [x] Demo-report artifact attached if CI generated it.
+
+## v0.2.1 launch hardening
+
+Status: in progress. This section does not alter the completed v0.2.0 record above.
+
+- [x] Observe-first and privacy-safe defaults are reflected in binary, example config, Docker, Helm, raw Kubernetes, and docs.
+- [x] Request/connection bounds, stale-grace retention, hotness summary accounting, and value-verified workload evidence have regression coverage.
+- [x] Canonical Apache-2.0 `LICENSE`, `NOTICE`, OCI license metadata, pinned base-image digests, pinned Actions, and Dependabot configuration are present.
+- [x] Release image workflow waits for the tagged-source gate, publishes provenance/SBOM, creates a GitHub-native attestation, and produces evidence from the exact published digest.
+- [x] GHCR install, design-partner CTA, issue forms, pull-request template, CODEOWNERS, support path, and private security-report link are documented.
+- [ ] Clean `make check`, `make validate-k8s`, and `make release-check` pass at the intended release commit.
+- [ ] Manually dispatch `extended-validation`; preserve the five-run 100,000-cardinality benchmarks and 100,000-key workload artifact without treating runner latency as a release threshold.
+- [ ] Public GitHub CI passes for that commit.
+- [ ] Main branch rules require the green CI checks and prevent deletion/force-push while retaining a practical owner bypass for the solo maintainer.
+- [ ] Dependabot alerts/security updates, secret scanning/push protection, and private vulnerability reporting are enabled in GitHub settings.
+- [ ] Repository topics and a 1280×640 social preview are configured in GitHub settings.
+- [ ] Annotated `v0.2.1` tag, GitHub Release, GHCR aliases/digest, attestation verification, and immutable-image evidence artifact are verified publicly.
+- [ ] The release evidence bundle is attached to the GitHub Release and its exact digest is copied into the staging guide.

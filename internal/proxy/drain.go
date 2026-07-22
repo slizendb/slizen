@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+type connectionLimitError struct{}
+
+func (connectionLimitError) Error() string { return "proxy connection limit reached" }
+
 // drainTracker closes admission and accounts for both command handlers and
 // accepted connections. The mutex makes the draining check and handler add
 // atomic, avoiding the Add-versus-Wait race of a bare sync.WaitGroup.
@@ -36,7 +40,7 @@ func newDrainTracker() *drainTracker {
 	}
 }
 
-func (d *drainTracker) accept(conn net.Conn, readTimeout time.Duration) (bool, error) {
+func (d *drainTracker) accept(conn net.Conn, readTimeout time.Duration, maxConnections int) (bool, error) {
 	if conn == nil {
 		return false, nil
 	}
@@ -44,6 +48,9 @@ func (d *drainTracker) accept(conn net.Conn, readTimeout time.Duration) (bool, e
 	defer d.mu.Unlock()
 	if d.draining {
 		return false, nil
+	}
+	if len(d.connections) >= maxConnections {
+		return false, connectionLimitError{}
 	}
 	if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
 		return false, err

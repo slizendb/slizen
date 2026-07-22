@@ -3,7 +3,7 @@
 Slizen ships two local benchmark paths:
 
 - `benchmark hotkey` is the v0.1 single-key demo and remains available for existing scripts.
-- `benchmark workload` is the v0.2 release workload harness for uniform, skewed, and moving-hot-key traffic.
+- `benchmark workload` is the v0.2 release workload harness for uniform, skewed, and moving-hot-key traffic, with key-and-write-version value verification in v0.2.1.
 
 Both paths produce local evidence for a specific machine and configuration. They are not scientific benchmarks or universal production capacity claims.
 
@@ -13,7 +13,7 @@ Both paths produce local evidence for a specific machine and configuration. They
 make demo-up
 ```
 
-Use a dedicated Redis or Valkey instance and a quiescent, exclusive Slizen process. The workload harness creates persistent keys under a unique invocation-specific suffix of `slizen:benchmark` by default and runs writes against them. The unique namespace gives every run unseen hotness state without a production hotness-reset endpoint.
+Use a dedicated Redis or Valkey instance and a quiescent, exclusive Slizen process. The workload harness creates persistent keys under a unique invocation-specific suffix and runs writes against them. The unique namespace gives every run unseen hotness state without a production hotness-reset endpoint. The Docker Compose demo caches only the reviewed `product:` prefix, so the example below uses `product:slizen:benchmark`; the CLI's generic default remains `slizen:benchmark`.
 
 When per-prefix cache policy is enabled, choose a `--key-prefix` covered by the policy you intend to measure. A bypassed prefix should correctly report no local-cache reduction.
 
@@ -27,7 +27,7 @@ go run ./cmd/slizenctl benchmark workload \
   --origin 127.0.0.1:6379 \
   --admin http://127.0.0.1:9090 \
   --scenario all \
-  --key-prefix slizen:benchmark \
+  --key-prefix product:slizen:benchmark \
   --keys 1000 \
   --value-size 1024 \
   --read-ratio 95 \
@@ -42,7 +42,7 @@ go run ./cmd/slizenctl benchmark workload \
 
 Select one scenario with `--scenario uniform`, `--scenario skew-80-20`, `--scenario skew-99-1`, or `--scenario moving-flash`. Use `--output json` to write JSON to stdout; `--json-file` writes the same structured result independently of stdout format.
 
-`--duration` and `--requests` are both limits for each measured phase. A phase ends when it reaches either limit. `--read-ratio 95` means approximately 95 percent GET and 5 percent SET operations. `--read-ratio 100` produces a read-only workload.
+`--duration` and `--requests` are both issuance limits for the generated operations in each measured phase. The harness stops issuing at either limit, lets already-issued operations finish under the client's bounded network timeouts, then performs one final validation GET for every key successfully written during that phase. The reported request count therefore can exceed `--requests` only by the final validation reads. `--read-ratio 95` means approximately 95 percent GET and 5 percent SET operations. `--read-ratio 100` produces a read-only workload and needs no final write validation.
 
 For `moving-flash` and `all`, `--flash-every` must be smaller than `--requests`; otherwise the advertised hot key could never move. A duration-limited run may still finish before a move, so choose limits that let at least `--flash-every + 1` operations complete.
 
@@ -67,24 +67,29 @@ Wall-clock duration can still change how much of that prefix completes. For clos
 
 For each selected scenario, the harness:
 
-1. Generates bounded keys and fixed-size values and seeds them directly into the origin.
+1. Generates bounded keys and deterministic fixed-size, key-and-write-version values and seeds generation zero directly into the origin.
 2. Runs the deterministic workload directly against the origin.
-3. Initializes all benchmark client connections, then purges Slizen's disposable local cache.
-4. Runs the same deterministic workload shape through Slizen.
-5. Reads Slizen counters before and after the proxy phase.
+3. Validates the final generation of every written key, then resets the origin dataset to generation zero.
+4. Initializes all benchmark client connections, then purges Slizen's disposable local cache.
+5. Runs the same deterministic workload shape through Slizen and validates every written key's final generation.
+6. Reads Slizen counters before and after the proxy phase.
+
+Operations for the same key are ordered by the harness: GETs may remain concurrent with other GETs, while a SET and its surrounding reads cannot overlap. Every successful read is compared with the exact generation expected at that point. This makes a cached pre-write generation a value mismatch instead of a valid hit. Operations on different keys remain concurrent.
 
 The JSON result includes:
 
 - p50, p95, and p99 client-observed latency for successful operations;
 - successful reads and writes, failures, elapsed time, and operations per second for each phase;
+- `value_mismatches` for successful GET responses that did not match the expected key and write generation;
+- `validation_reads`, `validation_failures`, and `validation_mismatches` for the final post-write generation check;
 - origin GET reduction normalized per successful GET;
 - Slizen cache hit ratio from `/v1/status` counter deltas;
 - Slizen CLI and daemon versions, origin version, and the benchmark CLI's Go, operating system, and architecture information.
-- an `evidence_valid` flag and notes explaining any failed, non-isolated, reset, or restarted measurement.
+- an `evidence_valid` flag and notes explaining any failed, mismatched, non-isolated, reset, or restarted measurement.
 
 The origin version is read with `INFO server`. If the origin ACL denies that command or the version is absent, the field is `unknown` and the result records a note instead of failing the workload.
 
-`origin_get_reduction_percent` can be negative if a valid run observes more origin GETs per successful read through Slizen than in the direct phase. `proved_origin_get_reduction` is true only when the measured proxy phase has cache hits, a positive reduction, no failed operations, monotonic daemon identity/counters, and an exact process-global request delta. Any unrelated traffic through the same Slizen process invalidates the reduction evidence instead of being silently attributed to the benchmark. A zero or false result is valid evidence, especially for uniform, write-heavy, short, or `observe`-mode runs.
+`origin_get_reduction_percent` can be negative if a valid run observes more origin GETs per successful read through Slizen than in the direct phase. `proved_origin_get_reduction` is true only when the measured proxy phase has cache hits, a positive reduction, no failed operations, zero value mismatches, monotonic daemon identity/counters, and an exact process-global request delta. Any stale-generation, cross-key, truncated, or corrupted GET payload invalidates the evidence instead of being counted as success. Any unrelated traffic through the same Slizen process also invalidates the reduction evidence instead of being silently attributed to the benchmark. A zero or false result is valid evidence, especially for uniform, write-heavy, short, or `observe`-mode runs.
 
 Latency percentiles combine successful GET and SET operations according to the configured ratio. Compare runs only when value size, ratio, concurrency, limits, scenario, seed, Slizen configuration, and runtime environment match.
 
@@ -95,13 +100,13 @@ The CLI rejects configurations outside these limits:
 - concurrency: 1 to 1,024 workers;
 - measured operations: 1 to 1,000,000 per phase;
 - keys: 2 to 100,000 per scenario; `skew-80-20` needs at least 5, while `all` and `skew-99-1` need at least 100;
-- value size: 1 byte to 1 MiB;
+- value size: 16 bytes to 1 MiB; the first 16 bytes bind the write generation and key identity;
 - aggregate generated dataset: 256 MiB across selected scenarios;
 - duration: greater than zero and at most one hour;
 - generated key prefix: at most 128 bytes.
 - admin status response: at most 64 KiB; other CLI admin JSON responses are capped at 4 MiB.
 
-Latency samples are bounded by the operation limit, seed pipelines are bounded by bytes, and scenario/key state is bounded by the configured dataset limits.
+Latency samples are bounded by the operation limit plus at most one final validation GET per key, seed pipelines are bounded by bytes, and scenario/key state is bounded by the configured dataset limits. Final validation reuses the configured concurrency and has a bounded 10-second-to-one-minute deadline derived from the phase duration.
 
 ## Run the v0.1 hot-key benchmark
 
@@ -136,3 +141,11 @@ make demo-report
 Slizen is not always faster than a direct local Redis or Valkey connection. The extra proxy hop can cost more than it saves for cold keys, uniform traffic, small deployments, short tests, or write-heavy workloads.
 
 The intended signal is narrower: under a repeated, read-heavy skew, determine whether local cache hits reduce measured origin GET pressure while keeping latency acceptable for that environment. Repeat runs and preserve the JSON artifacts before using the result to make a rollout decision.
+
+## Release evidence
+
+`make release-check` validates tagged source with 1,000 keys, concurrency 32, 10 seconds per phase, and one million operations as the secondary cap. It requires all four scenarios to have zero failures and zero `value_mismatches`; the stable 99/1 scenario must also prove positive origin GET reduction with real cache hits. These are correctness and reproducibility gates, not pass/fail latency or capacity thresholds.
+
+After a tag passes validation, the release workflow publishes the multi-architecture image, records GitHub-native provenance, and runs `scripts/release_evidence.sh` against the exact `ghcr.io/slizendb/slizen@sha256:...` image. The resulting manifest binds the image digest, full commit, version, workload JSON, demo report, and SHA-256 checksums.
+
+The manually dispatched `extended-validation` workflow runs 100,000-cardinality microbenchmarks five times and a 100,000-key, concurrency-128 workload without a universal latency threshold. It is intentionally separate from every-push and release CI because shared runners are not a stable performance baseline and the run is materially more expensive. Longer soak, resource profiling, upstream outage, and restart/drain drills still require dedicated engineering evidence.

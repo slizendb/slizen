@@ -54,6 +54,9 @@ type Tracker struct {
 	clock                        Clock
 	window                       time.Time
 	items                        map[string]*entry
+	admissionRing                []*entry
+	nextVictim                   int
+	hot                          int
 	evictions                    uint64
 	oversizedObservationsDropped uint64
 }
@@ -139,12 +142,7 @@ func (t *Tracker) Stats() (tracked int, hot int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	for _, ent := range t.items {
-		if ent.state == StateHot {
-			hot++
-		}
-	}
-	return len(t.items), hot
+	return len(t.items), t.hot
 }
 
 func (t *Tracker) Evictions() uint64 {
@@ -170,13 +168,9 @@ func (t *Tracker) AdvanceAndSnapshot(limit int) View {
 	view := View{
 		Transitions:                  t.advanceLocked(now),
 		Tracked:                      len(t.items),
+		Hot:                          t.hot,
 		Evictions:                    t.evictions,
 		OversizedObservationsDropped: t.oversizedObservationsDropped,
-	}
-	for _, ent := range t.items {
-		if ent.state == StateHot {
-			view.Hot++
-		}
 	}
 	view.Snapshots = topSnapshots(t.items, now, limit)
 	return view
@@ -198,20 +192,43 @@ func (t *Tracker) getOrCreateLocked(key string, now time.Time) (*entry, *Transit
 	if ent, ok := t.items[key]; ok {
 		return ent, nil
 	}
-	var evictionTransition *Transition
-	if len(t.items) >= t.cfg.MaxTrackedKeys {
-		if victim := t.evictOneLocked(); victim != nil && victim.state != StateCold {
-			evictionTransition = &Transition{Key: victim.key, From: victim.state, To: StateCold}
+
+	if len(t.admissionRing) < t.cfg.MaxTrackedKeys {
+		ent := &entry{
+			key:       key,
+			state:     StateCold,
+			lastSeen:  now,
+			createdAt: now,
 		}
+		t.admissionRing = append(t.admissionRing, ent)
+		t.items[key] = ent
+		return ent, nil
 	}
-	ent := &entry{
+
+	// Reuse the oldest admission slot. This keeps eviction deterministic and
+	// constant-time even when tracking is at its configured cardinality cap.
+	victim := t.admissionRing[t.nextVictim]
+	victimKey := victim.key
+	victimState := victim.state
+	delete(t.items, victimKey)
+	t.adjustHotCountLocked(victimState, StateCold)
+	t.evictions++
+	t.nextVictim++
+	if t.nextVictim == len(t.admissionRing) {
+		t.nextVictim = 0
+	}
+
+	*victim = entry{
 		key:       key,
 		state:     StateCold,
 		lastSeen:  now,
 		createdAt: now,
 	}
-	t.items[key] = ent
-	return ent, evictionTransition
+	t.items[key] = victim
+	if victimState == StateCold {
+		return victim, nil
+	}
+	return victim, &Transition{Key: victimKey, From: victimState, To: StateCold}
 }
 
 func (t *Tracker) advanceLocked(now time.Time) []Transition {
@@ -226,7 +243,9 @@ func (t *Tracker) advanceLocked(now time.Time) []Transition {
 	firstBoundary := t.window.Add(t.cfg.Window)
 	for _, ent := range t.items {
 		rate := float64(ent.count) / t.cfg.Window.Seconds()
+		before := ent.state
 		transitions = append(transitions, t.advanceEntryLocked(ent, rate, elapsedWindows, firstBoundary)...)
+		t.adjustHotCountLocked(before, ent.state)
 		ent.count = 0
 	}
 	t.window = t.window.Add(time.Duration(elapsedWindows) * t.cfg.Window)
@@ -375,22 +394,13 @@ func (t *Tracker) applyStateLocked(ent *entry, now time.Time) []Transition {
 	return []Transition{{Key: ent.key, From: before, To: ent.state}}
 }
 
-func (t *Tracker) evictOneLocked() *entry {
-	var victim *entry
-	for _, ent := range t.items {
-		if victim == nil {
-			victim = ent
-			continue
-		}
-		if ent.score < victim.score || (ent.score == victim.score && ent.lastSeen.Before(victim.lastSeen)) {
-			victim = ent
-		}
+func (t *Tracker) adjustHotCountLocked(before, after State) {
+	if before == StateHot && after != StateHot {
+		t.hot--
 	}
-	if victim != nil {
-		delete(t.items, victim.key)
-		t.evictions++
+	if before != StateHot && after == StateHot {
+		t.hot++
 	}
-	return victim
 }
 
 func (e *entry) snapshot(now time.Time) Snapshot {

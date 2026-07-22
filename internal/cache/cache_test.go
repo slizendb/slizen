@@ -39,6 +39,37 @@ func TestCacheTTLExpiration(t *testing.T) {
 	if _, ok := c.Get("key"); ok {
 		t.Fatal("expected expired entry")
 	}
+	if stats := c.Stats(); stats.Entries != 0 {
+		t.Fatalf("fresh lookup did not remove expired entry: %+v", stats)
+	}
+}
+
+func TestExpiredEntrySurvivesStatsAndInspectForStaleFallback(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	c := New(1024, 10, clock)
+	if !c.Put("key", []byte("value"), time.Second) {
+		t.Fatal("put failed")
+	}
+	clock.Advance(2 * time.Second)
+
+	if stats := c.Stats(); stats.Entries != 1 || stats.Bytes != EstimateSize("key", []byte("value")) {
+		t.Fatalf("stats did not report retained stale entry: %+v", stats)
+	}
+	if _, ok := c.Inspect("key"); ok {
+		t.Fatal("inspect reported expired entry as fresh")
+	}
+	item, ok := c.GetStale("key", 5*time.Second)
+	if !ok || string(item.Value) != "value" {
+		t.Fatalf("stats or inspect destroyed stale entry: item=%+v ok=%t", item, ok)
+	}
+
+	clock.Advance(4 * time.Second)
+	if _, ok := c.GetStale("key", 5*time.Second); ok {
+		t.Fatal("entry survived past stale grace")
+	}
+	if stats := c.Stats(); stats.Entries != 0 || stats.Bytes != 0 {
+		t.Fatalf("expired stale lookup did not release entry: %+v", stats)
+	}
 }
 
 func TestCacheLRUEviction(t *testing.T) {

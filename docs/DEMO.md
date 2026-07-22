@@ -8,7 +8,7 @@ The Slizen demo is a local Docker Compose proof path for the v0.2 developer prev
 - `/healthz`, `/readyz`, `/v1/status`, `/v1/hotkeys`, `/v1/audit`, and `/metrics` are reachable.
 - A client can write and read a key through the Slizen proxy.
 - A repeated hot-key workload can produce local cache hits in `cache` mode.
-- Benchmark/report artifacts can show cache hit ratio and upstream GET reduction from real counters.
+- Benchmark/report artifacts can show cache hit ratio and origin GET reduction from real counters.
 
 Run it:
 

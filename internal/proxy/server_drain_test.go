@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -125,6 +126,84 @@ func TestShutdownClosesPartialRequestClientWithoutIdleTimeout(t *testing.T) {
 		if errors.As(err, &netErr) && netErr.Timeout() {
 			t.Fatal("partial-request client timed out instead of being closed")
 		}
+	}
+}
+
+func TestServerRejectsOversizedRESPCommandAndClosesConnection(t *testing.T) {
+	cfg := drainTestConfig()
+	cfg.Proxy.MaxCommandBytes = 64
+	up := newBlockingGetUpstream(false)
+	server, _, _ := startDrainTestServer(t, cfg, up)
+	conn := dialDrainTestServer(t, server)
+	reader := bufio.NewReader(conn)
+	payload := "*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$40\r\n0123456789012345678901234567890123456789\r\n" +
+		"*3\r\n$3\r\nSET\r\n$8\r\ntrailing\r\n$5\r\nvalue\r\n"
+
+	if _, err := io.WriteString(conn, payload); err != nil {
+		t.Fatal(err)
+	}
+	if response, err := reader.ReadString('\n'); err != nil || !strings.Contains(response, "proxy.max_command_bytes") {
+		t.Fatalf("oversized response = %q, %v", response, err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.ReadByte(); err == nil {
+		t.Fatal("oversized-command connection remained open")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		active, connections := server.drain.snapshot()
+		if active == 0 && connections == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("oversized-command handler did not finish: active=%d connections=%d", active, connections)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if calls := up.doCalls.Load(); calls != 0 {
+		t.Fatalf("command trailing an oversized pipeline entry reached upstream: %d calls", calls)
+	}
+}
+
+func TestServerRejectsMalformedRESPWithoutDispatch(t *testing.T) {
+	cfg := drainTestConfig()
+	server, _, _ := startDrainTestServer(t, cfg, testutil.NewFakeUpstream())
+	conn := dialDrainTestServer(t, server)
+	reader := bufio.NewReader(conn)
+
+	if _, err := io.WriteString(conn, "*2\r\n$3\r\nGET\r\n!3\r\nkey\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	if response, err := reader.ReadString('\n'); err != nil || !strings.HasPrefix(response, "-ERR ") {
+		t.Fatalf("malformed response = %q, %v", response, err)
+	}
+}
+
+func TestServerRejectsConnectionsAtConfiguredLimit(t *testing.T) {
+	cfg := drainTestConfig()
+	cfg.Proxy.MaxConnections = 1
+	server, _, _ := startDrainTestServer(t, cfg, testutil.NewFakeUpstream())
+	first := dialDrainTestServer(t, server)
+
+	second, err := net.Dial("tcp", server.server.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+	if err := second.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(second, "*1\r\n$4\r\nPING\r\n"); err == nil {
+		response := make([]byte, len("+PONG\r\n"))
+		if _, readErr := io.ReadFull(second, response); readErr == nil {
+			t.Fatalf("second connection was admitted: %q", response)
+		}
+	}
+
+	if _, err := io.WriteString(first, "*1\r\n$4\r\nPING\r\n"); err != nil {
+		t.Fatalf("first connection stopped working: %v", err)
 	}
 }
 

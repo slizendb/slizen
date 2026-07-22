@@ -47,9 +47,11 @@ make demo-report
 cat ./tmp/demo-report.md
 ```
 
-`make release-check` — строгий release gate: он требует Helm, Docker Compose, работающий Docker daemon и `jq`, запускает Go checks, shell/docs checks, Kubernetes validation, `make smoke`, а затем четыре workload-сценария на отдельном Docker Compose stack. Gate проходит только при уникальном isolated key prefix, совпадающих version/commit Slizen, известной версии origin и валидном изолированном evidence для всех четырёх сценариев. Стабильный 99/1 skew обязан показать реальные cache hits и доказанное снижение origin GET; uniform или быстро движущийся flash вправе честно показать отсутствие выигрыша. Stack всегда останавливается после проверки.
+`make release-check` — строгий release gate: он требует Helm, Docker Compose, работающий Docker daemon и `jq`, запускает Go checks, shell/docs checks, Kubernetes validation, `make smoke`, а затем четыре workload-сценария на отдельном Docker Compose stack. Gate использует 1 000 keys, concurrency 32 и 10 секунд на phase. Он проходит только при уникальном isolated key prefix, совпадающих version/commit Slizen, известной версии origin, нулевых `value_mismatches` и валидном изолированном evidence для всех четырёх сценариев. Стабильный 99/1 skew обязан показать реальные cache hits и доказанное снижение origin GET; uniform или быстро движущийся flash вправе честно показать отсутствие выигрыша. Stack всегда останавливается после проверки.
 
 Workload evidence сохраняется в `./tmp/slizen-workload-result.json`.
+
+Release workflow сначала пропускает tagged source через этот gate, затем публикует multi-architecture image и повторно собирает evidence уже из `ghcr.io/slizendb/slizen@sha256:...`. Manifest связывает exact image digest, full commit и version; GitHub-native provenance можно проверить через `gh attestation verify`.
 
 `make demo-report` требует Docker Compose, запускает benchmark и сохраняет:
 
@@ -62,13 +64,13 @@ Workload evidence сохраняется в `./tmp/slizen-workload-result.json`.
 
 ## 5. Режимы
 
-По умолчанию:
+Безопасный режим по умолчанию:
 
 ```toml
-mode = "cache"
+mode = "observe"
 ```
 
-Для безопасного наблюдения перед staging:
+Для безопасного наблюдения перед staging достаточно:
 
 ```sh
 SLIZEN_MODE=observe go run ./cmd/slizend --config ./slizen.example.toml
@@ -84,15 +86,15 @@ go run ./cmd/slizenctl audit --admin http://127.0.0.1:9090
 
 ## 6. Privacy
 
-По умолчанию hot-key output использует HMAC identifiers:
+По умолчанию hot-key output использует HMAC identifiers. Если secret не задан, Slizen генерирует криптографически случайный process-local secret: он не логируется, но identifiers меняются после restart.
 
 ```toml
 [privacy]
 key_visibility = "hash"
-key_hash_secret = "change-me"
+# key_hash_secret = "load-from-your-secret-manager"
 ```
 
-Перед публичной демонстрацией поменяй `key_hash_secret`.
+Задавай стабильный high-entropy `key_hash_secret` через secret manager только если identifiers должны сравниваться между restart.
 
 `privacy.key_visibility = "plain"` используй только на приватном admin listener для локальной отладки.
 

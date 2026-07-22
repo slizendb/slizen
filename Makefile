@@ -1,9 +1,9 @@
 VERSION ?= dev
-COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 GOVULNCHECK_VERSION ?= v1.5.0
 LDFLAGS := -X github.com/slizendb/slizen/internal/buildinfo.Version=$(VERSION) -X github.com/slizendb/slizen/internal/buildinfo.Commit=$(COMMIT)
 
-.PHONY: fmt vet test race build vulncheck check release-check local-release-check version benchmark benchmark-workload demo-up demo demo-report demo-down smoke validate-k8s docker-up docker-down docker-compose-up docker-compose-down
+.PHONY: fmt vet test race build vulncheck check release-check release-evidence local-release-check version benchmark benchmark-workload demo-up demo demo-report demo-down smoke validate-k8s docker-up docker-down docker-compose-up docker-compose-down
 
 fmt:
 	go fmt ./...
@@ -28,6 +28,9 @@ check: fmt vet test race build
 release-check:
 	./scripts/release_check.sh
 
+release-evidence:
+	./scripts/release_evidence.sh
+
 local-release-check: release-check
 
 version:
@@ -39,7 +42,7 @@ benchmark:
 
 benchmark-workload:
 	mkdir -p ./tmp
-	go run -ldflags "$(LDFLAGS)" ./cmd/slizenctl benchmark workload --json-file ./tmp/slizen-workload-result.json
+	go run -ldflags "$(LDFLAGS)" ./cmd/slizenctl benchmark workload --key-prefix product:slizen:benchmark --json-file ./tmp/slizen-workload-result.json
 
 demo-up:
 	docker compose up --build -d

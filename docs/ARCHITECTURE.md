@@ -25,7 +25,7 @@ Write commands are sent upstream first. Successful writes invalidate affected lo
 
 The local cache is a bounded, in-memory LRU-style cache. Size accounting includes key bytes, value bytes, and a fixed per-entry overhead estimate. This is not exact runtime heap accounting, but the approximation is enforced consistently for global capacity and per-prefix `max_item_bytes` limits.
 
-Local TTL is the smallest of the remaining positive upstream TTL, configured `cache.max_local_ttl`, and the matching cache policy's `max_local_ttl`. Upstream keys without expiration use the applicable local cap, while values whose upstream PTTL has reached zero are not stored. Missing keys are not cached indefinitely; negative caching is disabled by default.
+Local TTL is the smallest of the remaining positive upstream TTL, configured `cache.max_local_ttl`, and the matching cache policy's `max_local_ttl`. Upstream keys without expiration use the applicable local cap, while values whose upstream PTTL has reached zero are not stored. Negative caching is not implemented in v0.2.1; the reserved `cache.negative_ttl` setting must remain `0s`.
 
 ## Hotness model
 
@@ -47,6 +47,8 @@ The active mode is exposed in `/v1/status`.
 The admin listener is unauthenticated in v0.2 and must not be exposed publicly.
 
 Normal response flushes receive a fresh `proxy.write_timeout` deadline, so a client that stops reading cannot pin a connection goroutine indefinitely. On shutdown, the proxy stops admitting new command handlers and wakes idle or partial-request clients. Accepted handlers and their connections are allowed to finish and flush for at most `proxy.shutdown_timeout`; after that deadline Slizen cancels the server-owned request context and force-closes the listener and remaining sockets.
+
+Parsed RESP commands are admitted only within configured byte, argument, MGET-key, and connection bounds. An over-limit command receives an error and its connection closes to release the enlarged read buffer. redcon assembles one full command before invoking Slizen, so these checks bound conversion, dispatch, and upstream work rather than parser allocation. Upstream GET and MGET responses are fully materialized and do not yet have a separate heap-byte cap; container memory limits and trusted cluster-internal access remain necessary.
 
 ## Privacy
 

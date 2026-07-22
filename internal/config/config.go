@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"math"
@@ -20,6 +21,10 @@ const (
 	maxCachePolicyPrefixBytes      = 1024
 	maxCachePolicyTotalPrefixBytes = 256 * 1024
 	maxHotnessTrackedKeys          = 100000
+	maxProxyCommandBytes           = 16 * 1024 * 1024
+	maxProxyCommandArgs            = 4096
+	maxProxyMGetKeys               = 2048
+	maxProxyConnections            = 10000
 )
 
 type Config struct {
@@ -38,6 +43,10 @@ type ProxyConfig struct {
 	ReadTimeout     time.Duration `toml:"read_timeout"`
 	WriteTimeout    time.Duration `toml:"write_timeout"`
 	ShutdownTimeout time.Duration `toml:"shutdown_timeout"`
+	MaxCommandBytes int           `toml:"max_command_bytes"`
+	MaxCommandArgs  int           `toml:"max_command_args"`
+	MaxMGetKeys     int           `toml:"max_mget_keys"`
+	MaxConnections  int           `toml:"max_connections"`
 }
 
 type AdminConfig struct {
@@ -96,12 +105,16 @@ type LoggingConfig struct {
 // Default returns the documented defaults.
 func Default() Config {
 	return Config{
-		Mode: "cache",
+		Mode: "observe",
 		Proxy: ProxyConfig{
 			Listen:          "0.0.0.0:6380",
 			ReadTimeout:     3 * time.Second,
 			WriteTimeout:    3 * time.Second,
 			ShutdownTimeout: 10 * time.Second,
+			MaxCommandBytes: 1 * 1024 * 1024,
+			MaxCommandArgs:  1024,
+			MaxMGetKeys:     512,
+			MaxConnections:  1024,
 		},
 		Admin: AdminConfig{
 			Listen:        "127.0.0.1:9090",
@@ -133,8 +146,9 @@ func Default() Config {
 		},
 		Privacy: PrivacyConfig{
 			KeyVisibility: "hash",
-			KeyHashSecret: "change-me",
-			KeyHashSalt:   "change-me",
+			// The generated secret is intentionally process-local. Operators that
+			// need stable identifiers can explicitly configure one.
+			KeyHashSecret: rand.Text(),
 		},
 		Logging: LoggingConfig{
 			Level:  "info",
@@ -185,6 +199,10 @@ type rawProxy struct {
 	ReadTimeout     *string `toml:"read_timeout"`
 	WriteTimeout    *string `toml:"write_timeout"`
 	ShutdownTimeout *string `toml:"shutdown_timeout"`
+	MaxCommandBytes *int    `toml:"max_command_bytes"`
+	MaxCommandArgs  *int    `toml:"max_command_args"`
+	MaxMGetKeys     *int    `toml:"max_mget_keys"`
+	MaxConnections  *int    `toml:"max_connections"`
 }
 
 type rawAdmin struct {
@@ -255,6 +273,18 @@ func applyRaw(cfg *Config, raw rawConfig) error {
 	}
 	if err := setDuration(raw.Proxy.ShutdownTimeout, &cfg.Proxy.ShutdownTimeout, "proxy.shutdown_timeout"); err != nil {
 		return err
+	}
+	if raw.Proxy.MaxCommandBytes != nil {
+		cfg.Proxy.MaxCommandBytes = *raw.Proxy.MaxCommandBytes
+	}
+	if raw.Proxy.MaxCommandArgs != nil {
+		cfg.Proxy.MaxCommandArgs = *raw.Proxy.MaxCommandArgs
+	}
+	if raw.Proxy.MaxMGetKeys != nil {
+		cfg.Proxy.MaxMGetKeys = *raw.Proxy.MaxMGetKeys
+	}
+	if raw.Proxy.MaxConnections != nil {
+		cfg.Proxy.MaxConnections = *raw.Proxy.MaxConnections
 	}
 	if raw.Admin.Listen != nil {
 		cfg.Admin.Listen = *raw.Admin.Listen
@@ -394,8 +424,30 @@ func applyEnv(cfg *Config) error {
 		}
 		return nil
 	}
+	setInt := func(name string, target *int) error {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return fmt.Errorf("%s is invalid: %w", name, err)
+			}
+			*target = parsed
+		}
+		return nil
+	}
 
 	setString("SLIZEN_PROXY_LISTEN", &cfg.Proxy.Listen)
+	if err := setInt("SLIZEN_PROXY_MAX_COMMAND_BYTES", &cfg.Proxy.MaxCommandBytes); err != nil {
+		return err
+	}
+	if err := setInt("SLIZEN_PROXY_MAX_COMMAND_ARGS", &cfg.Proxy.MaxCommandArgs); err != nil {
+		return err
+	}
+	if err := setInt("SLIZEN_PROXY_MAX_MGET_KEYS", &cfg.Proxy.MaxMGetKeys); err != nil {
+		return err
+	}
+	if err := setInt("SLIZEN_PROXY_MAX_CONNECTIONS", &cfg.Proxy.MaxConnections); err != nil {
+		return err
+	}
 	setString("SLIZEN_MODE", &cfg.Mode)
 	setString("SLIZEN_ADMIN_LISTEN", &cfg.Admin.Listen)
 	if err := setBool("SLIZEN_ADMIN_EXPOSE_RAW_KEYS", &cfg.Admin.ExposeRawKeys); err != nil {
@@ -453,9 +505,23 @@ func Validate(cfg Config) error {
 	positiveDuration("upstream.write_timeout", cfg.Upstream.WriteTimeout)
 	positiveDuration("cache.max_local_ttl", cfg.Cache.MaxLocalTTL)
 	nonNegativeDuration("cache.stale_grace", cfg.Cache.StaleGrace)
-	nonNegativeDuration("cache.negative_ttl", cfg.Cache.NegativeTTL)
 	positiveDuration("hotness.window", cfg.Hotness.Window)
 	positiveDuration("hotness.cooldown", cfg.Hotness.Cooldown)
+
+	positiveBoundedInt := func(name string, value, maximum int) {
+		if value <= 0 {
+			errs = append(errs, fmt.Errorf("%s must be greater than zero", name))
+		} else if value > maximum {
+			errs = append(errs, fmt.Errorf("%s must not exceed %d", name, maximum))
+		}
+	}
+	positiveBoundedInt("proxy.max_command_bytes", cfg.Proxy.MaxCommandBytes, maxProxyCommandBytes)
+	positiveBoundedInt("proxy.max_command_args", cfg.Proxy.MaxCommandArgs, maxProxyCommandArgs)
+	positiveBoundedInt("proxy.max_mget_keys", cfg.Proxy.MaxMGetKeys, maxProxyMGetKeys)
+	positiveBoundedInt("proxy.max_connections", cfg.Proxy.MaxConnections, maxProxyConnections)
+	if cfg.Proxy.MaxCommandArgs > 0 && cfg.Proxy.MaxMGetKeys >= cfg.Proxy.MaxCommandArgs {
+		errs = append(errs, errors.New("proxy.max_mget_keys must be less than proxy.max_command_args"))
+	}
 
 	if cfg.Upstream.Database != 0 {
 		errs = append(errs, errors.New("upstream.database must be 0"))
@@ -465,6 +531,9 @@ func Validate(cfg Config) error {
 	}
 	if cfg.Cache.MaxEntries < 0 {
 		errs = append(errs, errors.New("cache.max_entries must be non-negative"))
+	}
+	if cfg.Cache.NegativeTTL != 0 {
+		errs = append(errs, errors.New("cache.negative_ttl is reserved and must be zero"))
 	}
 	policies := cfg.Cache.Policies
 	if len(policies) > maxCachePolicies {
@@ -568,21 +637,25 @@ func finiteFloat(value float64) bool {
 // RedactedSummary returns values safe for startup logs.
 func RedactedSummary(cfg Config) map[string]any {
 	return map[string]any{
-		"mode":               cfg.Mode,
-		"proxy_listen":       cfg.Proxy.Listen,
-		"admin_listen":       cfg.Admin.Listen,
-		"upstream_address":   cfg.Upstream.Address,
-		"upstream_username":  redactPresence(cfg.Upstream.Username),
-		"upstream_password":  redactPresence(cfg.Upstream.Password),
-		"upstream_database":  cfg.Upstream.Database,
-		"key_visibility":     EffectiveKeyVisibility(cfg),
-		"key_hash_secret":    redactPresence(cfg.Privacy.KeyHashSecret),
-		"cache_max_bytes":    cfg.Cache.MaxBytes,
-		"cache_max_entries":  cfg.Cache.MaxEntries,
-		"cache_max_ttl":      cfg.Cache.MaxLocalTTL.String(),
-		"cache_policy_count": len(cfg.Cache.Policies),
-		"hotness_window":     cfg.Hotness.Window.String(),
-		"log_level":          cfg.Logging.Level,
+		"mode":                    cfg.Mode,
+		"proxy_listen":            cfg.Proxy.Listen,
+		"proxy_max_command_bytes": cfg.Proxy.MaxCommandBytes,
+		"proxy_max_command_args":  cfg.Proxy.MaxCommandArgs,
+		"proxy_max_mget_keys":     cfg.Proxy.MaxMGetKeys,
+		"proxy_max_connections":   cfg.Proxy.MaxConnections,
+		"admin_listen":            cfg.Admin.Listen,
+		"upstream_address":        cfg.Upstream.Address,
+		"upstream_username":       redactPresence(cfg.Upstream.Username),
+		"upstream_password":       redactPresence(cfg.Upstream.Password),
+		"upstream_database":       cfg.Upstream.Database,
+		"key_visibility":          EffectiveKeyVisibility(cfg),
+		"key_hash_secret":         redactPresence(cfg.Privacy.KeyHashSecret),
+		"cache_max_bytes":         cfg.Cache.MaxBytes,
+		"cache_max_entries":       cfg.Cache.MaxEntries,
+		"cache_max_ttl":           cfg.Cache.MaxLocalTTL.String(),
+		"cache_policy_count":      len(cfg.Cache.Policies),
+		"hotness_window":          cfg.Hotness.Window.String(),
+		"log_level":               cfg.Logging.Level,
 	}
 }
 

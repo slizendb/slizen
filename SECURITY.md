@@ -4,7 +4,7 @@ Slizen v0.2 is a developer preview and does not have a production security suppo
 
 ## Reporting A Vulnerability
 
-Please report suspected vulnerabilities privately to the repository owner instead of opening a public exploit issue. Include:
+Use GitHub's [private vulnerability reporting form](https://github.com/slizendb/slizen/security/advisories/new) instead of opening a public exploit issue. If the form is unavailable, do not disclose the issue publicly; contact the repository owner through their GitHub profile and ask for a private reporting channel. Include:
 
 - affected commit or tag;
 - deployment assumptions;

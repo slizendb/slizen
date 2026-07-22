@@ -75,6 +75,39 @@ func TestHotnessBoundedTracking(t *testing.T) {
 	}
 }
 
+func TestTrackingEvictionUsesDeterministicAdmissionFIFO(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	tracker := New(Config{Window: time.Second, EWMAAlpha: 1, PromotionThreshold: 10, DemotionThreshold: 1, MinimumHotWindows: 1, Cooldown: time.Second, MaxTrackedKeys: 2, Clock: clock})
+
+	tracker.Observe("a")
+	tracker.Observe("b")
+	tracker.Observe("a") // Re-observation does not change admission order.
+	tracker.Observe("c")
+	if _, ok := tracker.items["a"]; ok {
+		t.Fatal("oldest admission a was not evicted")
+	}
+	if _, ok := tracker.items["b"]; !ok {
+		t.Fatal("newer admission b was evicted before a")
+	}
+
+	tracker.Observe("d")
+	if _, ok := tracker.items["b"]; ok {
+		t.Fatal("second-oldest admission b was not evicted next")
+	}
+	if _, ok := tracker.items["c"]; !ok {
+		t.Fatal("replacement c was evicted before b")
+	}
+	if _, ok := tracker.items["d"]; !ok {
+		t.Fatal("latest admission d is not tracked")
+	}
+	if tracked, hot := tracker.Stats(); tracked != 2 || hot != 0 {
+		t.Fatalf("stats after FIFO churn = tracked:%d hot:%d, want 2/0", tracked, hot)
+	}
+	if evictions := tracker.Evictions(); evictions != 2 {
+		t.Fatalf("tracking evictions = %d, want 2", evictions)
+	}
+}
+
 func TestTrackingEvictionReturnsHotDemotion(t *testing.T) {
 	clock := testutil.NewFakeClock(time.Unix(0, 0))
 	tracker := New(Config{
@@ -91,6 +124,39 @@ func TestTrackingEvictionReturnsHotDemotion(t *testing.T) {
 	transitions := tracker.Observe("new")
 	if len(transitions) != 1 || transitions[0] != (Transition{Key: "hot", From: StateHot, To: StateCold}) {
 		t.Fatalf("eviction transitions = %+v", transitions)
+	}
+}
+
+func TestStatsHotCountTracksPromotionDemotionAndEviction(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	tracker := New(Config{
+		Window: time.Second, EWMAAlpha: 1, PromotionThreshold: 1,
+		DemotionThreshold: 0.1, MinimumHotWindows: 1,
+		Cooldown: time.Second, MaxTrackedKeys: 1, Clock: clock,
+	})
+
+	tracker.Observe("first")
+	clock.Advance(time.Second)
+	tracker.Advance()
+	if tracked, hot := tracker.Stats(); tracked != 1 || hot != 1 {
+		t.Fatalf("stats after promotion = tracked:%d hot:%d, want 1/1", tracked, hot)
+	}
+
+	tracker.Observe("replacement")
+	if tracked, hot := tracker.Stats(); tracked != 1 || hot != 0 {
+		t.Fatalf("stats after hot eviction = tracked:%d hot:%d, want 1/0", tracked, hot)
+	}
+
+	clock.Advance(time.Second)
+	view := tracker.AdvanceAndSnapshot(1)
+	if view.Tracked != 1 || view.Hot != 1 {
+		t.Fatalf("view after replacement promotion = tracked:%d hot:%d, want 1/1", view.Tracked, view.Hot)
+	}
+
+	clock.Advance(time.Second)
+	tracker.Advance()
+	if tracked, hot := tracker.Stats(); tracked != 1 || hot != 0 {
+		t.Fatalf("stats after demotion = tracked:%d hot:%d, want 1/0", tracked, hot)
 	}
 }
 
@@ -182,6 +248,9 @@ func TestLongIdleGapCompletesCooldownAndRequiresRepromotion(t *testing.T) {
 	transitions := tracker.Advance()
 	if tracker.IsHot("k") {
 		t.Fatal("long idle gap left key hot")
+	}
+	if _, hot := tracker.Stats(); hot != 0 {
+		t.Fatalf("stats retained %d hot keys after closed-form cooldown", hot)
 	}
 	if len(transitions) != 2 || transitions[0].To != StateCooling || transitions[1].To != StateCold {
 		t.Fatalf("idle transitions = %+v, want HOT->COOLING->COLD", transitions)
