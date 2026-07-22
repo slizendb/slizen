@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -12,12 +13,14 @@ type connectionLimitError struct{}
 func (connectionLimitError) Error() string { return "proxy connection limit reached" }
 
 // drainTracker closes admission and accounts for both command handlers and
-// accepted connections. The mutex makes the draining check and handler add
-// atomic, avoiding the Add-versus-Wait race of a bare sync.WaitGroup.
+// accepted connections. Handler admission uses a double-checked reservation;
+// completion takes the connection mutex once to linearize with drain startup.
+// This removes steady-path admission locking while still ensuring that every
+// successfully admitted handler is included in drain accounting.
 type drainTracker struct {
 	mu          sync.Mutex
-	draining    bool
-	active      int
+	draining    atomic.Bool
+	active      atomic.Int64
 	connections map[net.Conn]*trackedConnection
 	pendingHead *trackedConnection
 	started     chan struct{}
@@ -46,7 +49,7 @@ func (d *drainTracker) accept(conn net.Conn, readTimeout time.Duration, maxConne
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.draining {
+	if d.draining.Load() {
 		return false, nil
 	}
 	if len(d.connections) >= maxConnections {
@@ -78,13 +81,25 @@ func (d *drainTracker) connectionClosed(conn net.Conn) {
 }
 
 func (d *drainTracker) beginHandler() bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.draining {
+	if d.draining.Load() {
 		return false
 	}
-	d.active++
-	return true
+	if active := d.active.Add(1); active <= 0 {
+		d.active.Add(-1)
+		panic("proxy active handler count overflow")
+	}
+	if !d.draining.Load() {
+		return true
+	}
+
+	// Drain won after the first check. This reservation never becomes an
+	// admitted handler, so roll it back and repair a drain signal that may have
+	// observed the transient count before rollback.
+	d.decrementActiveHandler()
+	d.mu.Lock()
+	d.signalDrainedLocked()
+	d.mu.Unlock()
+	return false
 }
 
 // prepareHandlerDone sets a fresh write deadline immediately before redcon
@@ -92,12 +107,9 @@ func (d *drainTracker) beginHandler() bool {
 // preserves the shutdown deadlines and leaves the handler accounted for until
 // its goroutine closes the connection.
 func (d *drainTracker) prepareHandlerDone(conn net.Conn, readTimeout, writeTimeout time.Duration) (draining bool, deadlineErr error) {
-	d.mu.Lock()
-	if d.draining {
-		d.mu.Unlock()
+	if d.draining.Load() {
 		return true, nil
 	}
-	d.mu.Unlock()
 
 	if conn != nil {
 		now := time.Now()
@@ -107,43 +119,40 @@ func (d *drainTracker) prepareHandlerDone(conn net.Conn, readTimeout, writeTimeo
 		)
 	}
 
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	// A drain may have started while the connection deadlines were being set.
 	// Keep the handler accounted for in that case; finishHandler will close the
 	// connection and call completeDrainingHandler. Closing the connection also
 	// makes any normal deadline that raced with the drain harmless.
-	if d.draining {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.draining.Load() {
 		return true, deadlineErr
 	}
-	d.active--
+	d.decrementActiveHandler()
 	return false, deadlineErr
 }
 
 func (d *drainTracker) completeDrainingHandler() {
 	d.mu.Lock()
-	d.active--
+	defer d.mu.Unlock()
+	if !d.draining.Load() {
+		panic("proxy handler completed through the drain path before drain startup")
+	}
+	d.decrementActiveHandler()
 	d.signalDrainedLocked()
-	d.mu.Unlock()
 }
 
 func (d *drainTracker) stopAdmission() {
 	d.mu.Lock()
-	if !d.draining {
-		d.draining = true
-		close(d.started)
-	}
+	d.stopAdmissionLocked()
 	d.signalDrainedLocked()
 	d.mu.Unlock()
 }
 
 func (d *drainTracker) beginDrain(deadline time.Time) (drained <-chan struct{}, active, connections, deadlineFailures int) {
 	d.mu.Lock()
-	if !d.draining {
-		d.draining = true
-		close(d.started)
-	}
-	active = d.active
+	d.stopAdmissionLocked()
+	active = int(d.active.Load())
 	connections = len(d.connections)
 	d.signalDrainedLocked()
 	d.mu.Unlock()
@@ -201,11 +210,24 @@ func (d *drainTracker) removePendingLocked(tracked *trackedConnection) {
 func (d *drainTracker) snapshot() (active, connections int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.active, len(d.connections)
+	return int(d.active.Load()), len(d.connections)
 }
 
 func (d *drainTracker) signalDrainedLocked() {
-	if d.draining && d.active == 0 && len(d.connections) == 0 {
+	if d.draining.Load() && d.active.Load() == 0 && len(d.connections) == 0 {
 		d.drainedOnce.Do(func() { close(d.drained) })
+	}
+}
+
+func (d *drainTracker) stopAdmissionLocked() {
+	if !d.draining.Swap(true) {
+		close(d.started)
+	}
+}
+
+func (d *drainTracker) decrementActiveHandler() {
+	if remaining := d.active.Add(-1); remaining < 0 {
+		d.active.Add(1)
+		panic("proxy active handler count underflow")
 	}
 }

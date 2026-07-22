@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -11,6 +12,7 @@ import (
 type blockingDeadlineConn struct {
 	readStarted chan struct{}
 	releaseRead chan struct{}
+	readOnce    sync.Once
 }
 
 func (c *blockingDeadlineConn) Read([]byte) (int, error)         { return 0, io.EOF }
@@ -22,9 +24,229 @@ func (c *blockingDeadlineConn) SetDeadline(time.Time) error      { return nil }
 func (c *blockingDeadlineConn) SetWriteDeadline(time.Time) error { return nil }
 
 func (c *blockingDeadlineConn) SetReadDeadline(time.Time) error {
-	close(c.readStarted)
-	<-c.releaseRead
+	c.readOnce.Do(func() {
+		close(c.readStarted)
+		<-c.releaseRead
+	})
 	return nil
+}
+
+func TestDrainWaitsForAcceptThatPassedAdmissionCheck(t *testing.T) {
+	tracker := newDrainTracker()
+	conn := &blockingDeadlineConn{
+		readStarted: make(chan struct{}),
+		releaseRead: make(chan struct{}),
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	type acceptResult struct {
+		accepted bool
+		err      error
+	}
+	accepted := make(chan acceptResult, 1)
+	go func() {
+		ok, err := tracker.accept(conn, time.Hour, 1)
+		accepted <- acceptResult{accepted: ok, err: err}
+	}()
+	<-conn.readStarted
+
+	type drainResult struct {
+		drained     <-chan struct{}
+		active      int
+		connections int
+	}
+	drainCalling := make(chan struct{})
+	drainStarted := make(chan drainResult, 1)
+	go func() {
+		close(drainCalling)
+		drained, active, connections, _ := tracker.beginDrain(time.Now().Add(time.Second))
+		drainStarted <- drainResult{drained: drained, active: active, connections: connections}
+	}()
+	<-drainCalling
+	select {
+	case <-tracker.started:
+		t.Fatal("drain passed an accept still inside the connection critical section")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(conn.releaseRead)
+	if result := <-accepted; !result.accepted || result.err != nil {
+		t.Fatalf("accept = %t, %v", result.accepted, result.err)
+	}
+	result := <-drainStarted
+	if result.active != 0 || result.connections != 1 {
+		t.Fatalf("drain snapshot = active:%d connections:%d, want 0/1", result.active, result.connections)
+	}
+	select {
+	case <-result.drained:
+		t.Fatal("drain completed before the accepted connection closed")
+	default:
+	}
+	tracker.connectionClosed(conn)
+	waitClosed(t, result.drained, "accepted connection to drain")
+}
+
+func TestDrainClosesAfterLastHandlerAndConnectionInEitherOrder(t *testing.T) {
+	for _, handlerFirst := range []bool{true, false} {
+		name := "connection_first"
+		if handlerFirst {
+			name = "handler_first"
+		}
+		t.Run(name, func(t *testing.T) {
+			tracker := newDrainTracker()
+			conn := &blockingDeadlineConn{
+				readStarted: make(chan struct{}),
+				releaseRead: make(chan struct{}),
+			}
+			close(conn.releaseRead)
+			accepted, err := tracker.accept(conn, time.Hour, 1)
+			if err != nil || !accepted {
+				t.Fatalf("accept = %t, %v", accepted, err)
+			}
+			if !tracker.beginHandler() {
+				t.Fatal("handler admission unexpectedly closed")
+			}
+			drained, active, connections, _ := tracker.beginDrain(time.Now().Add(time.Second))
+			if active != 1 || connections != 1 {
+				t.Fatalf("drain snapshot = active:%d connections:%d, want 1/1", active, connections)
+			}
+
+			completeHandler := func() {
+				draining, err := tracker.prepareHandlerDone(nil, time.Second, time.Second)
+				if err != nil || !draining {
+					t.Fatalf("handler completion = draining:%t error:%v", draining, err)
+				}
+				tracker.completeDrainingHandler()
+			}
+			if handlerFirst {
+				completeHandler()
+			} else {
+				tracker.connectionClosed(conn)
+			}
+			select {
+			case <-drained:
+				t.Fatal("drain completed after only one tracked half finished")
+			default:
+			}
+			if handlerFirst {
+				tracker.connectionClosed(conn)
+			} else {
+				completeHandler()
+			}
+			waitClosed(t, drained, "last handler and connection")
+		})
+	}
+}
+
+func TestBeginHandlerAndDrainAreLinearizable(t *testing.T) {
+	for range 1_000 {
+		tracker := newDrainTracker()
+		start := make(chan struct{})
+		admitted := make(chan bool, 1)
+		drainDone := make(chan struct{})
+		go func() {
+			<-start
+			admitted <- tracker.beginHandler()
+		}()
+		go func() {
+			<-start
+			tracker.stopAdmission()
+			close(drainDone)
+		}()
+		close(start)
+		wasAdmitted := <-admitted
+		<-drainDone
+
+		active, connections := tracker.snapshot()
+		wantActive := 0
+		if wasAdmitted {
+			wantActive = 1
+		}
+		if active != wantActive || connections != 0 {
+			t.Fatalf("post-race snapshot = active:%d connections:%d, want %d/0", active, connections, wantActive)
+		}
+		if wasAdmitted {
+			if draining, err := tracker.prepareHandlerDone(nil, 0, 0); !draining || err != nil {
+				t.Fatalf("admitted handler completion = draining:%t error:%v", draining, err)
+			}
+			tracker.completeDrainingHandler()
+		}
+		waitClosed(t, tracker.drained, "admission/drain race")
+		if tracker.beginHandler() {
+			t.Fatal("handler admission reopened after drain")
+		}
+	}
+}
+
+func TestConcurrentDrainInitiatorsCloseStartedOnce(t *testing.T) {
+	tracker := newDrainTracker()
+	if !tracker.beginHandler() {
+		t.Fatal("handler admission unexpectedly closed")
+	}
+
+	var wg sync.WaitGroup
+	for i := range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if i%2 == 0 {
+				tracker.stopAdmission()
+				return
+			}
+			tracker.beginDrain(time.Now())
+		}()
+	}
+	wg.Wait()
+	waitClosed(t, tracker.started, "concurrent drain initiation")
+	if active, connections := tracker.snapshot(); active != 1 || connections != 0 {
+		t.Fatalf("concurrent drain snapshot = active:%d connections:%d, want 1/0", active, connections)
+	}
+	if draining, err := tracker.prepareHandlerDone(nil, 0, 0); !draining || err != nil {
+		t.Fatalf("handler completion = draining:%t error:%v", draining, err)
+	}
+	tracker.completeDrainingHandler()
+	waitClosed(t, tracker.drained, "concurrent drain initiators")
+}
+
+func TestDrainCounterGuardsRestoreState(t *testing.T) {
+	t.Run("overflow", func(t *testing.T) {
+		tracker := newDrainTracker()
+		tracker.active.Store(1<<63 - 1)
+		requireDrainPanic(t, func() { tracker.beginHandler() })
+		if active := tracker.active.Load(); active != 1<<63-1 {
+			t.Fatalf("active after overflow = %d, want %d", active, int64(1<<63-1))
+		}
+	})
+
+	t.Run("underflow", func(t *testing.T) {
+		tracker := newDrainTracker()
+		tracker.stopAdmission()
+		requireDrainPanic(t, tracker.completeDrainingHandler)
+		if active := tracker.active.Load(); active != 0 {
+			t.Fatalf("active after underflow = %d, want 0", active)
+		}
+
+		snapshot := make(chan struct{})
+		go func() {
+			tracker.snapshot()
+			close(snapshot)
+		}()
+		waitClosed(t, snapshot, "drain mutex after recovered counter panic")
+	})
+}
+
+func requireDrainPanic(t *testing.T, fn func()) {
+	t.Helper()
+	didPanic := false
+	func() {
+		defer func() {
+			didPanic = recover() != nil
+		}()
+		fn()
+	}()
+	if !didPanic {
+		t.Fatal("operation did not panic")
+	}
 }
 
 func TestDrainDeadlineUnblocksBlockedConnectionWrite(t *testing.T) {

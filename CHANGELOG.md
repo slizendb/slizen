@@ -7,12 +7,14 @@
 - Redis-backed GET misses fetch the value and its remaining TTL in one pipelined round trip while preserving missing-key, cancellation, and transport-error semantics.
 - The verified local-cache GET path avoids miss-only timeout allocation, redundant hotness/cache-stat locks, generic command parsing, and repeated Prometheus label lookup.
 - Proxy drain deadline syscalls no longer hold the global drain mutex; a second draining-state check preserves shutdown accounting when draining starts concurrently.
+- Steady-state handler drain accounting uses a double-checked atomic reservation and one completion critical section instead of three global mutex handoffs; raced reservations roll back without executing a command.
 - The hotness tracker can commit the final required qualifying window as soon as its count makes the promotion threshold mathematically unavoidable. EWMA scoring, consecutive-window hysteresis, and cooldown semantics remain unchanged, but hot keys no longer wait for an otherwise redundant wall-clock boundary.
 - Workload evidence attributes read, write, and final-validation latency separately and records whether a phase stopped at its request or duration limit.
 
 ### Performance
 
 - On Apple M5 with Go 1.26.5, the corrected handler-level cache-hit benchmark median fell from 488.0 ns/op to 159.2 ns/op; the concurrent dispatch median fell from 918.8 ns/op to 531.6 ns/op. Allocations fell from 320 B and 8 allocations per operation to 16 B and 2 allocations per operation. These are local microbenchmark results, not production capacity claims.
+- Against commit `86623ef`, steady-state handler drain bookkeeping fell by 54–71% across local `GOMAXPROCS=1,10,32` microbenchmarks. In ten counterbalanced `GOMAXPROCS=10` dispatch-level warm-hit A/B pairs, every pair favored the candidate and median time fell from 538.6 to 383.75 ns/op (28.7%) with allocations unchanged at 15 B and 2 allocations per operation. These in-process results exclude TCP, RESP parsing, socket I/O, and upstream work.
 - Across three local Docker hot-key repeats, warm Slizen p99 had a 0.095 ms median tax over direct Valkey while serving 100% cache hits with zero origin GETs. Across three complete request-bound gates, the mixed 99/1 workload reduced origin GETs by 71.4–79.2% with a 0.23–0.52 ms read-p99 tax. These measurements describe this machine and workload only.
 - Across five alternating local Docker 99/1 A/B pairs, guaranteed final-window promotion raised the median cache-hit ratio from 36.00% to 61.61%, raised median origin GET reduction from 72.57% to 85.92%, and cut median upstream GETs from 26,044 to 13,371. Median Slizen read p99 remained effectively flat at 1.364 versus 1.368 ms, with zero failures or value/final-validation mismatches. The steady tracker benchmark cost rose by 0.76 ns/op (3.1%) with zero allocations; all figures are specific to this host and workload.
 

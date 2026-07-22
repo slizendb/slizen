@@ -76,7 +76,7 @@ Before profiling, the serial benchmark was corrected to opt into cache mode so t
 | `BenchmarkProxyGETCacheHit` | 488.0, 481.8, 487.4, 544.9, 502.1 | 162.0, 159.2, 158.5, 158.8, 159.2 | -67.4% | 320 / 8 | 16 / 2 |
 | `BenchmarkProxyGETCacheHitParallel` | 920.4, 907.1, 912.2, 926.1, 918.8 | 449.5, 531.6, 442.3, 562.0, 539.2 | -42.1% | 320 / 8 | 15 / 2 |
 
-The serial medians are 488.0 and 159.2 ns/op; the concurrent medians are 918.8 and 531.6 ns/op. Retained allocation bytes fell by about 95%, and allocation count fell by 75%. Remaining concurrent cost is dominated by bounded cache-LRU, tracker, and drain-accounting synchronization; changing those ownership models is intentionally outside this surgical pass. The benchmark still excludes RESP parsing and real socket I/O, so the result supports a narrower “lower Slizen hot-hit overhead” claim, not an end-to-end production latency guarantee.
+The serial medians are 488.0 and 159.2 ns/op; the concurrent medians are 918.8 and 531.6 ns/op. Retained allocation bytes fell by about 95%, and allocation count fell by 75%. After this first pass, remaining concurrent cost was dominated by bounded cache-LRU, tracker, and drain-accounting synchronization. The drain-accounting component is addressed in the follow-up below; larger cache and tracker ownership changes remain outside this surgical pass. The benchmark still excludes RESP parsing and real socket I/O, so the result supports a narrower “lower Slizen hot-hit overhead” claim, not an end-to-end production latency guarantee.
 
 Three JSON-backed local Docker hot-key repeats from the same working tree used 32 clients and 50,000 requests per phase on a fresh key each time. Their median direct Valkey p50/p95/p99 was 0.628/0.921/1.182 ms; the fully warm Slizen median was 0.632/0.970/1.277 ms with a 100% cache-hit ratio and zero upstream GETs in every repeat. The median warm-hit p99 tax was therefore 0.095 ms (about 8.0%) while median throughput remained within about 1%; this is evidence that the optimized warm path can approach direct latency while removing origin reads, not a universal latency promise. Three complete request-bound four-scenario gates also passed with exact sample-accounting invariants. Across those runs, mixed 99/1 read p99 was 1.36–1.54 ms through Slizen versus 1.02–1.15 ms direct, while origin GET reduction ranged from 71.4% to 79.2%. This wider adaptive-workload spread is why release evidence has no universal latency threshold and why future work should report repeated-run variance.
 
@@ -99,6 +99,57 @@ Five alternating baseline/candidate Docker pairs used fresh Slizen processes, un
 All ten benchmark invocations and their 20 measured phases reached the request limit with zero failures, value mismatches, or final-validation mismatches. A separate complete four-scenario release gate also passed. Its moving-flash phase produced a 6.2% cache-hit ratio and 90.2% origin GET reduction; most moving-flash savings still came from request coalescing, so that figure is not presented as a cache-only win.
 
 The added steady-state branch is measurable but bounded: 15 local `BenchmarkHotnessObservation` samples moved from a 24.35 ns/op median to 25.11 ns/op (+3.1%, or 0.76 ns/op), with zero allocations before and after. This is inside the 5% guard chosen before the experiment and is outweighed by the measured reduction in adaptation delay for the target workload.
+
+### Drain-accounting follow-up
+
+A mutex profile of baseline commit `86623ef` identified steady-state handler drain accounting as a concurrent dispatch bottleneck. Every successful request acquired the global drain mutex once during admission and twice around normal completion. The candidate uses a double-checked atomic reservation during admission and one completion critical section. A reservation that races with drain startup is rolled back and returns without executing a command; connection admission, drain startup, and completion signaling remain serialized by the existing mutex.
+
+The identical `BenchmarkDrainTrackerHandlerParallel` harness was copied unmodified from the revision containing this section into a source archive of baseline commit `86623ef`; it is retained as `internal/proxy/drain_bench_test.go` in the candidate. It measures normal handler admission and completion with no connection or active drain. Both revisions used this command:
+
+```sh
+go test ./internal/proxy -run '^$' \
+  -bench '^BenchmarkDrainTrackerHandlerParallel$' \
+  -benchmem -benchtime=1s -count=10 -cpu=1,10,32
+```
+
+The raw ns/op samples were:
+
+- `GOMAXPROCS=1`: baseline 12.30, 12.30, 12.32, 12.34, 12.37, 12.41, 12.42, 12.42, 12.50, 12.51; candidate 5.641, 5.639, 5.636, 5.662, 5.643, 5.643, 5.634, 5.629, 5.634, 5.656.
+- `GOMAXPROCS=10`: baseline 212.8, 212.5, 212.6, 213.7, 211.8, 214.2, 211.9, 211.7, 213.3, 211.9; candidate 64.02, 62.07, 61.60, 62.65, 62.82, 61.43, 62.03, 62.71, 61.97, 62.52.
+- `GOMAXPROCS=32`: baseline 202.7, 200.4, 201.0, 199.9, 200.4, 200.6, 203.9, 202.4, 201.1, 202.8; candidate 62.43, 63.04, 62.41, 61.93, 62.31, 62.98, 62.34, 63.02, 62.10, 62.92.
+
+Their medians are:
+
+| `GOMAXPROCS` | Baseline ns/op | Candidate ns/op | Lower ns/op | B/allocs before and after |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 12.39 | 5.640 | 54.5% | 0 / 0 |
+| 10 | 212.55 | 62.295 | 70.7% | 0 / 0 |
+| 32 | 201.05 | 62.42 | 69.0% | 0 / 0 |
+
+The dispatch-level `BenchmarkProxyGETCacheHitParallel` adds the real cache-hit dispatch path and a pre-parsed command, but still uses a no-op benchmark connection. Each revision used the command below once per pair, alternating baseline-first and candidate-first order:
+
+```sh
+go test ./internal/proxy -run '^$' \
+  -bench '^BenchmarkProxyGETCacheHitParallel$' \
+  -benchmem -benchtime=1s -count=1 -cpu=10
+```
+
+| Pair | Execution order | Baseline ns/op | Candidate ns/op |
+| ---: | --- | ---: | ---: |
+| 1 | baseline, candidate | 539.8 | 381.2 |
+| 2 | candidate, baseline | 535.1 | 378.9 |
+| 3 | baseline, candidate | 456.1 | 392.7 |
+| 4 | candidate, baseline | 542.1 | 396.7 |
+| 5 | baseline, candidate | 554.1 | 380.0 |
+| 6 | candidate, baseline | 538.8 | 374.5 |
+| 7 | baseline, candidate | 537.0 | 392.6 |
+| 8 | candidate, baseline | 452.3 | 394.1 |
+| 9 | baseline, candidate | 538.4 | 382.9 |
+| 10 | candidate, baseline | 544.6 | 384.6 |
+
+All ten pairs favored the candidate. Median time was 538.6 versus 383.75 ns/op, or 28.7% lower, with paired reductions from 12.9% to 31.4%; benchmark allocations were unchanged at 15 B and 2 allocations per operation. An earlier independent ten-sample batch measured a smaller 14.9% reduction, from 445.8 to 379.45 ns/op, so the defensible conclusion is a repeatable reduction in local parallel dispatch contention rather than one universal percentage.
+
+These benchmarks exclude TCP, RESP parsing, socket I/O, and upstream requests. `GOMAXPROCS=32` oversubscribes this Apple M5 and is a contention stress case. The results do not establish an end-to-end p99 or production-capacity improvement.
 
 ## v0.2 Workload Harness
 
