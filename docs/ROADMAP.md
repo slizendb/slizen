@@ -70,7 +70,7 @@ Status: implemented and locally validated on 2026-07-22; unreleased.
 - [x] Remove redundant final-window boundary delay once a key's current count guarantees promotion without weakening EWMA or consecutive-window hysteresis.
 - [x] Correct the cache-hit microbenchmark, add a concurrent dispatch benchmark, and record a repeated before/after allocation baseline.
 - [x] Attribute workload read, write, and final-validation latency separately while preserving the backward-compatible aggregate distribution.
-- [ ] Pass the complete Go, Docker, Kubernetes, and request-bound workload release gate from the intended clean commit before tagging.
+- [x] Pass the complete Go, Docker, Kubernetes, and request-bound workload release gate from the intended clean commit before tagging.
 
 Release gate: the complete v0.2.1 safety contract remains green, the fixed-size workload evidence proves its sample accounting, and proxy-overhead claims are backed by repeated benchmarks with explicit scope.
 
