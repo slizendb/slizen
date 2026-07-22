@@ -36,7 +36,7 @@ Customer discovery runs in parallel with v0.2. Product validation targets are de
 
 ## v0.2.1: Launch hardening
 
-Status: in progress. The release candidate is being validated; no `v0.2.1` tag or public image is recorded as complete yet. v0.2.0 remains the released developer preview above.
+Status: release candidate complete on 2026-07-22; tag, image, and evidence publication remain. Until those artifacts are verified, v0.2.0 remains the released developer preview above.
 
 Implemented in the release candidate:
 

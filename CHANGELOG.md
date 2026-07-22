@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2.1 - Unreleased Launch Hardening
+## v0.2.1 - 2026-07-22 - Launch Hardening
 
 ### Added
 
