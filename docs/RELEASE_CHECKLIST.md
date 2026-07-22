@@ -58,23 +58,23 @@ After tagged-source validation succeeds, the release workflow publishes the imag
 - `docs/REDIS_COMPATIBILITY.md` matches command handling.
 - `docs/BENCHMARKING.md` explains how to reproduce the benchmark.
 - `docs/STAGING_ROLLOUT.md` contains observe-to-cache and rollback gates.
-- `docs/RELEASE_NOTES_v0.2.1.md` is ready to paste into GitHub Releases.
+- `docs/RELEASE_NOTES_v0.2.2.md` is ready to paste into GitHub Releases.
 
 ## Tag
 
 ```sh
-git tag -a v0.2.1 -m "Slizen v0.2.1"
-git push origin v0.2.1
+git tag -a v0.2.2 -m "Slizen v0.2.2"
+git push origin v0.2.2
 ```
 
 ## GitHub Release Notes
 
-Use `docs/RELEASE_NOTES_v0.2.1.md`. After the workflow succeeds, attach the immutable-image evidence bundle and record its image digest in `docs/PUBLIC_RELEASE_CHECKLIST.md` and `docs/STAGING_ROLLOUT.md`.
+Use `docs/RELEASE_NOTES_v0.2.2.md`. After the workflow succeeds, attach the immutable-image evidence bundle and record its image digest in `docs/PUBLIC_RELEASE_CHECKLIST.md` and `docs/STAGING_ROLLOUT.md`.
 
 Verify GitHub-native provenance:
 
 ```sh
-gh attestation verify oci://ghcr.io/slizendb/slizen:0.2.1 \
+gh attestation verify oci://ghcr.io/slizendb/slizen:0.2.2 \
   --repo slizendb/slizen
 ```
 

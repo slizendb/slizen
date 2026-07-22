@@ -25,7 +25,7 @@ Write commands are sent upstream first. Successful writes invalidate affected lo
 
 The local cache is a bounded, in-memory LRU-style cache. Size accounting includes key bytes, value bytes, and a fixed per-entry overhead estimate. This is not exact runtime heap accounting, but the approximation is enforced consistently for global capacity and per-prefix `max_item_bytes` limits.
 
-Local TTL is the smallest of the remaining positive upstream TTL, configured `cache.max_local_ttl`, and the matching cache policy's `max_local_ttl`. Upstream keys without expiration use the applicable local cap, while values whose upstream PTTL has reached zero are not stored. Negative caching is not implemented in v0.2.1; the reserved `cache.negative_ttl` setting must remain `0s`.
+Local TTL is the smallest of the remaining positive upstream TTL, configured `cache.max_local_ttl`, and the matching cache policy's `max_local_ttl`. Upstream keys without expiration use the applicable local cap, while values whose upstream PTTL has reached zero are not stored. Negative caching is not implemented in v0.2.2; the reserved `cache.negative_ttl` setting must remain `0s`.
 
 ## Hotness model
 

@@ -45,7 +45,7 @@ docker run --rm \
   ghcr.io/slizendb/slizen:0.2
 ```
 
-Если origin недоступен как `host.docker.internal:6379`, подставь его приватный Docker/DNS-адрес. См. [последний релиз](https://github.com/slizendb/slizen/releases/latest), [release notes v0.2.1](docs/RELEASE_NOTES_v0.2.1.md) и [безопасную конфигурацию](docs/CONFIGURATION.md).
+Если origin недоступен как `host.docker.internal:6379`, подставь его приватный Docker/DNS-адрес. См. [последний релиз](https://github.com/slizendb/slizen/releases/latest), [release notes v0.2.2](docs/RELEASE_NOTES_v0.2.2.md) и [безопасную конфигурацию](docs/CONFIGURATION.md).
 
 ## Быстрый старт из исходников
 
@@ -208,9 +208,10 @@ Release материалы:
 - [docs/RELEASE_NOTES_v0.1.md](docs/RELEASE_NOTES_v0.1.md)
 - [docs/RELEASE_NOTES_v0.2.md](docs/RELEASE_NOTES_v0.2.md)
 - [docs/RELEASE_NOTES_v0.2.1.md](docs/RELEASE_NOTES_v0.2.1.md)
+- [docs/RELEASE_NOTES_v0.2.2.md](docs/RELEASE_NOTES_v0.2.2.md)
 
 ## Roadmap
 
-v0.2.1 launch hardening [выпущена 2026-07-22](https://github.com/slizendb/slizen/releases/tag/v0.2.1). Single-node safe-staging scope не расширился, но defaults, bounds, evidence и release hygiene стали строже. v0.3 — Redis/Valkey-assisted invalidation для прямых записей в origin с fail-safe поведением. Mesh, Operator и hosted control plane остаются более поздними гипотезами и начнутся только после подтверждённого спроса реальных пользователей.
+Release candidate v0.2.2 по производительности готова; публикация tag, image и immutable evidence ещё остаётся. Single-node safe-staging scope не расширился, но измеренный proxy tax стал ниже, а workload attribution — точнее. v0.3 — Redis/Valkey-assisted invalidation для прямых записей в origin с fail-safe поведением. Mesh, Operator и hosted control plane остаются более поздними гипотезами и начнутся только после подтверждённого спроса реальных пользователей.
 
 Gossip не даёт write consensus. Slizen остаётся cache layer.

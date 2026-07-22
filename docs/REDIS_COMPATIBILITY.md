@@ -52,4 +52,4 @@ All parsed commands are subject to bounded proxy admission before conversion or 
 | Keys in one `MGET` | 512 | 2,048 |
 | Concurrent accepted proxy connections | 1,024 | 10,000 |
 
-An over-limit command receives a RESP error and Slizen closes that connection so its enlarged read buffer can be released. The byte and argument limits are not pre-allocation parser ceilings: redcon v1.6.2 reads one complete RESP command before invoking Slizen's handler. Upstream GET and MGET responses are fully materialized and have no separate response-byte heap cap in v0.2.1. Keep the proxy on a trusted internal network and retain a container or Pod memory limit.
+An over-limit command receives a RESP error and Slizen closes that connection so its enlarged read buffer can be released. The byte and argument limits are not pre-allocation parser ceilings: redcon v1.6.2 reads one complete RESP command before invoking Slizen's handler. Upstream GET and MGET responses are fully materialized and have no separate response-byte heap cap in v0.2.2. Keep the proxy on a trusted internal network and retain a container or Pod memory limit.

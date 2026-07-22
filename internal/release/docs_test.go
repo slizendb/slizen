@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/slizendb/slizen/internal/buildinfo"
 )
 
 func TestRedisCompatibilityDocMatchesKnownCommands(t *testing.T) {
@@ -89,6 +91,7 @@ func TestCanonicalReleaseIdentity(t *testing.T) {
 		filepath.Join("charts", "slizen", "values.yaml"),
 		filepath.Join("deploy", "kubernetes", "observe-sidecar.yaml"),
 		filepath.Join("docs", "RELEASE_NOTES_v0.1.md"),
+		filepath.Join("docs", "RELEASE_NOTES_v0.2.2.md"),
 	}
 	for _, name := range files {
 		data, err := os.ReadFile(filepath.Join(root, name))
@@ -115,7 +118,43 @@ func TestCanonicalReleaseIdentity(t *testing.T) {
 	assertContains("Dockerfile", `org.opencontainers.image.source="https://github.com/slizendb/slizen"`)
 	assertContains(filepath.Join(".github", "workflows", "release-image.yml"), "ghcr.io/slizendb/slizen")
 	assertContains(filepath.Join("charts", "slizen", "values.yaml"), "repository: ghcr.io/slizendb/slizen")
-	assertContains(filepath.Join("deploy", "kubernetes", "observe-sidecar.yaml"), "image: ghcr.io/slizendb/slizen:0.2.1")
+	assertContains(filepath.Join("deploy", "kubernetes", "observe-sidecar.yaml"), "image: ghcr.io/slizendb/slizen:0.2.2")
+}
+
+func TestReleaseVersionSurfacesMatch(t *testing.T) {
+	root := repoRoot(t)
+	version := buildinfo.Version
+	if version == "" || version == "dev" || strings.ContainsAny(version, " \t\r\n") {
+		t.Fatalf("build version %q is not a release version", version)
+	}
+	if releaseVersion := os.Getenv("SLIZEN_VERSION"); releaseVersion != "" && version != releaseVersion {
+		t.Fatalf("source release version %q does not match SLIZEN_VERSION %q", version, releaseVersion)
+	}
+
+	checks := []struct {
+		name  string
+		wants []string
+	}{
+		{filepath.Join("charts", "slizen", "Chart.yaml"), []string{"version: " + version, `appVersion: "` + version + `"`}},
+		{filepath.Join("deploy", "kubernetes", "observe-sidecar.yaml"), []string{"image: ghcr.io/slizendb/slizen:" + version}},
+		{filepath.Join("scripts", "release_check.sh"), []string{`SLIZEN_VERSION:-` + version}},
+		{"CHANGELOG.md", []string{"## v" + version + " - "}},
+		{filepath.Join("docs", "RELEASE_CHECKLIST.md"), []string{"RELEASE_NOTES_v" + version + ".md", "git tag -a v" + version, "ghcr.io/slizendb/slizen:" + version}},
+		{filepath.Join("docs", "RELEASE_NOTES_v"+version+".md"), []string{"# Slizen v" + version + " —"}},
+		{filepath.Join(".github", "ISSUE_TEMPLATE", "bug.yml"), []string{version + " (full commit SHA)"}},
+	}
+
+	for _, check := range checks {
+		data, err := os.ReadFile(filepath.Join(root, check.name))
+		if err != nil {
+			t.Fatalf("read %s: %v", check.name, err)
+		}
+		for _, want := range check.wants {
+			if !strings.Contains(string(data), want) {
+				t.Errorf("%s does not contain release version marker %q", check.name, want)
+			}
+		}
+	}
 }
 
 func repoRoot(t *testing.T) string {

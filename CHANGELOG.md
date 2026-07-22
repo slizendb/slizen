@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.2 - 2026-07-22 - Proxy Tax Reduction and Benchmark Attribution
 
 ### Changed
 
