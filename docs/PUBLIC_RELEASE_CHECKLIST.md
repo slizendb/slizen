@@ -46,13 +46,15 @@ Non-blocking UI polish: upload the versioned social preview asset in GitHub repo
 
 ## v0.2.2 proxy tax reduction and benchmark attribution
 
-Status: release candidate complete on 2026-07-22. Until the annotated tag, image digest, attestation, and immutable evidence are verified, v0.2.1 remains the latest public release.
+Status: released on 2026-07-22. The annotated `v0.2.2` tag resolves to commit `74a12767deb72db9bc78bebd807cbe8717fa572c`; the verified multi-architecture image index is `sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627`. The exact-commit [public CI](https://github.com/slizendb/slizen/actions/runs/29952948422), [extended validation](https://github.com/slizendb/slizen/actions/runs/29953153624), and [release image workflow](https://github.com/slizendb/slizen/actions/runs/29953669287) are green. The checksummed image-bound bundle and separate 100,000-key evidence are attached to the [GitHub Release](https://github.com/slizendb/slizen/releases/tag/v0.2.2).
+
+The canonical image-bound 99/1 run reached the request limit in both phases with zero request failures, value mismatches, or final-validation failures or mismatches. It measured `94,961` direct-origin GETs versus `9,707` through Slizen, an `89.778%` reduction, with a `73.628%` cache-hit ratio. Attributed read p99 was `2.137 ms` through Slizen versus `1.460 ms` direct; this is an origin-load result, not a universal speed claim.
 
 - [x] Cached-GET and drain-accounting hot paths were profiled before optimization and retain regression coverage.
 - [x] Repeated local microbenchmarks and counterbalanced Docker A/B runs record allocation, origin-load, and latency scope without universal speed claims.
 - [x] Workload evidence attributes read, write, ordering-wait, and final-validation latency and proves exact request-limit sample accounting.
-- [ ] Clean `make release-check` and public CI pass at the exact v0.2.2 release commit.
-- [ ] Annotated `v0.2.2` tag and multi-architecture GHCR image aliases resolve to the intended full commit and one immutable index digest.
-- [ ] GitHub-native provenance verifies for the published digest, and the image-bound evidence manifest binds the same version, commit, and digest.
-- [ ] GitHub Release contains `docs/RELEASE_NOTES_v0.2.2.md`, `SHA256SUMS`, and the complete checksummed evidence bundle.
-- [ ] The verified image digest and release workflow are recorded in this checklist, the roadmap, release notes, README evidence summary, and staging guide.
+- [x] Clean `make release-check` and public CI pass at the exact v0.2.2 release commit.
+- [x] Annotated `v0.2.2` tag and multi-architecture GHCR image aliases resolve to the intended full commit and one immutable index digest.
+- [x] GitHub-native provenance verifies for the published digest, and the image-bound evidence manifest binds the same version, commit, and digest.
+- [x] GitHub Release contains `docs/RELEASE_NOTES_v0.2.2.md`, `SHA256SUMS`, the complete checksummed image evidence bundle, and both extended-validation artifacts.
+- [x] The verified digest and workflow runs are recorded here and in the release notes; the roadmap, README evidence summary, and staging guide carry their corresponding release status, evidence, and immutable deployment pin.

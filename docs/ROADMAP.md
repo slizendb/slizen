@@ -60,7 +60,7 @@ Release gate: safe defaults and bounded failure behavior survive unit, race, int
 
 ## v0.2.2: Proxy tax reduction and benchmark attribution
 
-Status: release candidate complete on 2026-07-22; tag, image, and immutable evidence publication remain. Until those artifacts are verified, v0.2.1 remains the latest released developer preview.
+Status: released developer preview (`v0.2.2`) on 2026-07-22. The tag resolves to commit `74a12767deb72db9bc78bebd807cbe8717fa572c`; the verified multi-architecture image index is `sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627`. The [release image workflow](https://github.com/slizendb/slizen/actions/runs/29953669287) is green, and the checksummed image-bound bundle plus separate 100,000-key evidence are attached to the [GitHub Release](https://github.com/slizendb/slizen/releases/tag/v0.2.2).
 
 - [x] Pipeline upstream `GET` and `PTTL` into one round trip without weakening error semantics.
 - [x] Remove miss-only timeout allocation and redundant tracker/cache-stat locking from verified local GET hits.
@@ -70,8 +70,8 @@ Status: release candidate complete on 2026-07-22; tag, image, and immutable evid
 - [x] Remove redundant final-window boundary delay once a key's current count guarantees promotion without weakening EWMA or consecutive-window hysteresis.
 - [x] Correct the cache-hit microbenchmark, add a concurrent dispatch benchmark, and record a repeated before/after allocation baseline.
 - [x] Attribute workload read, write, and final-validation latency separately while preserving the backward-compatible aggregate distribution.
-- [ ] Pass the complete Go, Docker, Kubernetes, and request-bound workload release gate from the intended clean commit before tagging.
-- [ ] Publish and verify the `v0.2.2` tag, GitHub Release, GHCR digest, provenance, and attached immutable-image evidence.
+- [x] Pass the complete Go, Docker, Kubernetes, and request-bound workload release gate from the intended clean commit before tagging.
+- [x] Publish and verify the `v0.2.2` tag, GitHub Release, GHCR digest, provenance, and attached immutable-image evidence.
 
 Release gate: the complete v0.2.1 safety contract remains green, the fixed-size workload evidence proves its sample accounting, and proxy-overhead claims are backed by repeated benchmarks with explicit scope.
 
