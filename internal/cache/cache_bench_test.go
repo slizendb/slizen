@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -33,4 +34,22 @@ func BenchmarkConcurrentReads(b *testing.B) {
 			_, _ = c.Get("key")
 		}
 	})
+}
+
+func BenchmarkCacheStats(b *testing.B) {
+	for _, entries := range []int{1, 1_000, 100_000} {
+		b.Run(strconv.Itoa(entries), func(b *testing.B) {
+			c := New(1<<30, entries, nil)
+			for i := 0; i < entries; i++ {
+				if !c.Put("key:"+strconv.Itoa(i), []byte("value"), time.Hour) {
+					b.Fatal("failed to seed cache")
+				}
+			}
+
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = c.Stats()
+			}
+		})
+	}
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"strconv"
@@ -43,6 +44,17 @@ type snapshotReadUpstream struct {
 	blockedCommand string
 	started        chan struct{}
 	release        chan struct{}
+}
+
+type observedDoneContext struct {
+	context.Context
+	once     sync.Once
+	observed chan struct{}
+}
+
+func (c *observedDoneContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.observed) })
+	return nil
 }
 
 func newSnapshotReadUpstream() *snapshotReadUpstream {
@@ -102,6 +114,9 @@ func (u *snapshotReadUpstream) waitForRelease(ctx context.Context, command strin
 
 func testConfig() config.Config {
 	cfg := config.Default()
+	// Service behavior tests opt into cache mode explicitly; the production
+	// default is observe-first.
+	cfg.Mode = "cache"
 	cfg.Cache.MaxBytes = 1 << 20
 	cfg.Cache.MaxEntries = 1000
 	cfg.Cache.MaxLocalTTL = time.Minute
@@ -333,6 +348,63 @@ func TestMGETStaleFallbackRequiresEveryMissingKey(t *testing.T) {
 	}
 	if len(values) != 1 || !values[0].Exists || string(values[0].Data) != "cached" {
 		t.Fatalf("expected stale cached value, got %+v", values)
+	}
+}
+
+func TestStaleFallbackSurvivesUnrelatedCacheObservation(t *testing.T) {
+	tests := []struct {
+		name    string
+		observe func(context.Context, *Service) error
+	}{
+		{
+			name: "cache stats",
+			observe: func(_ context.Context, svc *Service) error {
+				_ = svc.CacheInfo()
+				return nil
+			},
+		},
+		{
+			name: "hot key inspection",
+			observe: func(_ context.Context, svc *Service) error {
+				_ = svc.HotKeys(10)
+				return nil
+			},
+		},
+		{
+			name: "unrelated traffic",
+			observe: func(ctx context.Context, svc *Service) error {
+				_, err := svc.Get(ctx, "other")
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clock := testutil.NewFakeClock(time.Unix(0, 0))
+			up := testutil.NewFakeUpstream()
+			up.Put("stale", []byte("cached"), 0)
+			up.Put("other", []byte("other"), 0)
+			svc := newTestServiceWithConfig(up, clock, func(cfg *config.Config) {
+				cfg.Cache.MaxLocalTTL = time.Second
+				cfg.Cache.AllowStaleOnUpstreamError = true
+				cfg.Cache.StaleGrace = 5 * time.Second
+			})
+			promoteAndCache(t, svc, clock, "stale")
+			clock.Advance(1500 * time.Millisecond)
+
+			if err := tt.observe(context.Background(), svc); err != nil {
+				t.Fatal(err)
+			}
+			up.SetFailure(true)
+			value, err := svc.Get(context.Background(), "stale")
+			if err != nil {
+				t.Fatalf("stale fallback failed after %s: %v", tt.name, err)
+			}
+			if !value.Exists || string(value.Data) != "cached" {
+				t.Fatalf("stale fallback after %s = %+v", tt.name, value)
+			}
+		})
 	}
 }
 
@@ -724,5 +796,147 @@ func TestSingleflightCoalescesGETMisses(t *testing.T) {
 
 	if calls := up.GetCallCount("k"); calls != 1 {
 		t.Fatalf("expected one upstream GET, got %d", calls)
+	}
+}
+
+func TestSingleflightCanceledLeaderDoesNotPoisonFollower(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	up := newSnapshotReadUpstream()
+	up.Put("k", []byte("value"), 0)
+	started, release := up.blockNext("GET")
+	svc := newTestService(up, clock)
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderResult := make(chan error, 1)
+	go func() {
+		_, err := svc.Get(leaderCtx, "k")
+		leaderResult <- err
+	}()
+	<-started
+
+	type followerRead struct {
+		value upstream.Value
+		err   error
+	}
+	followerResult := make(chan followerRead, 1)
+	followerWaiting := make(chan struct{})
+	followerCtx := &observedDoneContext{Context: context.Background(), observed: followerWaiting}
+	go func() {
+		value, err := svc.Get(followerCtx, "k")
+		followerResult <- followerRead{value: value, err: err}
+	}()
+	<-followerWaiting
+
+	cancelLeader()
+	select {
+	case err := <-leaderResult:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("leader error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled leader did not return while shared fetch remained active")
+	}
+	close(release)
+	select {
+	case result := <-followerResult:
+		if result.err != nil {
+			t.Fatalf("follower GET failed: %v", result.err)
+		}
+		if !result.value.Exists || string(result.value.Data) != "value" {
+			t.Fatalf("follower value = %+v", result.value)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("follower did not receive shared result")
+	}
+	if calls := up.GetCallCount("k"); calls != 1 {
+		t.Fatalf("upstream GET calls = %d, want 1", calls)
+	}
+}
+
+func TestSharedReadTimeoutUsesStricterConfiguredBudget(t *testing.T) {
+	tests := []struct {
+		name     string
+		proxy    time.Duration
+		upstream time.Duration
+		want     time.Duration
+	}{
+		{name: "proxy is stricter", proxy: 25 * time.Millisecond, upstream: time.Second, want: 25 * time.Millisecond},
+		{name: "upstream is stricter", proxy: time.Second, upstream: 40 * time.Millisecond, want: 40 * time.Millisecond},
+		{name: "invalid upstream uses fallback", proxy: time.Second, upstream: 0, want: time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Proxy.ReadTimeout = tt.proxy
+			cfg.Upstream.ReadTimeout = tt.upstream
+			svc := &Service{cfg: cfg}
+			if got := svc.sharedReadTimeout(); got != tt.want {
+				t.Fatalf("shared timeout = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSingleflightSharedFetchIsBoundedByProxyTimeout(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	up := newSnapshotReadUpstream()
+	up.Put("k", []byte("value"), 0)
+	started, _ := up.blockNext("GET")
+	svc := newTestServiceWithConfig(up, clock, func(cfg *config.Config) {
+		cfg.Proxy.ReadTimeout = 20 * time.Millisecond
+		cfg.Upstream.ReadTimeout = time.Hour
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := svc.Get(context.Background(), "k")
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("shared upstream GET did not start")
+	}
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("shared GET error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shared GET outlived proxy read timeout")
+	}
+}
+
+func TestCloseCancelsActiveSingleflightFetch(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	up := newSnapshotReadUpstream()
+	up.Put("k", []byte("value"), 0)
+	started, _ := up.blockNext("GET")
+	svc := newTestServiceWithConfig(up, clock, func(cfg *config.Config) {
+		cfg.Proxy.ReadTimeout = time.Hour
+		cfg.Upstream.ReadTimeout = time.Hour
+	})
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := svc.Get(context.Background(), "k")
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("shared upstream GET did not start")
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("shared GET error after Close = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Service.Close did not cancel active shared GET")
 	}
 }

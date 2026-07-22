@@ -115,7 +115,7 @@ func TestCanonicalReleaseIdentity(t *testing.T) {
 	assertContains("Dockerfile", `org.opencontainers.image.source="https://github.com/slizendb/slizen"`)
 	assertContains(filepath.Join(".github", "workflows", "release-image.yml"), "ghcr.io/slizendb/slizen")
 	assertContains(filepath.Join("charts", "slizen", "values.yaml"), "repository: ghcr.io/slizendb/slizen")
-	assertContains(filepath.Join("deploy", "kubernetes", "observe-sidecar.yaml"), "image: ghcr.io/slizendb/slizen:0.2.0")
+	assertContains(filepath.Join("deploy", "kubernetes", "observe-sidecar.yaml"), "image: ghcr.io/slizendb/slizen:0.2.1")
 }
 
 func repoRoot(t *testing.T) string {

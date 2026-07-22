@@ -1,6 +1,6 @@
 # Dependencies
 
-Slizen v0.2 keeps dependencies intentionally small.
+Slizen v0.2.1 keeps dependencies intentionally small.
 
 | Dependency | Purpose |
 | --- | --- |
@@ -11,3 +11,5 @@ Slizen v0.2 keeps dependencies intentionally small.
 | `golang.org/x/sync/singleflight` | Request coalescing for concurrent cache misses. |
 
 No other direct third-party runtime dependencies are used in v0.2. Indirect module requirements in `go.mod` are transitive dependencies of the approved libraries and are tracked for reproducible builds.
+
+The repository and OCI image include Slizen's canonical Apache-2.0 `LICENSE` and `NOTICE`. The notice retains attribution required by the Prometheus instrumentation library; module versions and transitive dependency identity remain reproducible through `go.mod`, `go.sum`, and the release SBOM.

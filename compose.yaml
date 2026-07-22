@@ -1,6 +1,6 @@
 services:
   valkey:
-    image: valkey/valkey:8-alpine
+    image: valkey/valkey:8-alpine@sha256:a038175878d66b9d274fbf8be73c0305e93798b83917647f167e18cef3c71eec
     command: ["valkey-server", "--appendonly", "no"]
     ports:
       - "127.0.0.1:${SLIZEN_VALKEY_PORT:-6379}:6379"
@@ -11,6 +11,7 @@ services:
       retries: 30
 
   slizend:
+    image: ${SLIZEN_IMAGE:-slizen:dev}
     build:
       context: .
       args:

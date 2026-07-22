@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -34,6 +35,13 @@ type Server struct {
 	forceOnce      sync.Once
 	requestCtx     context.Context
 	cancelRequests context.CancelFunc
+}
+
+// connectionState prevents redcon from dispatching commands that were already
+// parsed from the same pipeline after Slizen has decided to close the client.
+// redcon drains its parsed command slice before observing Conn.Close.
+type connectionState struct {
+	dispatchStopped bool
 }
 
 func NewServer(cfg config.ProxyConfig, svc *service.Service, logger *slog.Logger) *Server {
@@ -129,9 +137,17 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) acceptConnection(conn redcon.Conn) bool {
-	accepted, err := s.drain.accept(conn.NetConn(), s.cfg.ReadTimeout)
+	accepted, err := s.drain.accept(conn.NetConn(), s.cfg.ReadTimeout, s.cfg.MaxConnections)
 	if err != nil {
-		s.logger.Debug("proxy connection deadline setup failed", "remote", conn.RemoteAddr(), "error", err)
+		var limitErr connectionLimitError
+		if errors.As(err, &limitErr) {
+			s.logger.Debug("proxy connection rejected at configured limit", "remote", conn.RemoteAddr(), "max_connections", s.cfg.MaxConnections)
+		} else {
+			s.logger.Debug("proxy connection deadline setup failed", "remote", conn.RemoteAddr(), "error", err)
+		}
+	}
+	if accepted {
+		conn.SetContext(&connectionState{})
 	}
 	return accepted
 }
@@ -144,7 +160,11 @@ func (s *Server) connectionClosed(conn redcon.Conn, err error) {
 }
 
 func (s *Server) dispatch(conn redcon.Conn, cmd redcon.Command) {
+	if dispatchStopped(conn) {
+		return
+	}
 	if !s.drain.beginHandler() {
+		stopDispatch(conn)
 		conn.WriteError("TRYAGAIN Slizen is shutting down")
 		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			s.logger.Debug("proxy shutdown connection close failed", "remote", conn.RemoteAddr(), "error", err)
@@ -164,6 +184,7 @@ func (s *Server) finishHandler(conn redcon.Conn) {
 		return
 	}
 	defer s.drain.completeDrainingHandler()
+	stopDispatch(conn)
 	if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 		s.logger.Debug("proxy drained connection close failed", "remote", conn.RemoteAddr(), "error", err)
 	}
@@ -286,6 +307,15 @@ func (s *Server) handle(conn redcon.Conn, cmd redcon.Command) {
 	defer func() {
 		s.svc.Metrics().ObserveRequest(command, result, time.Since(start))
 	}()
+	if limitError := commandLimitError(cmd, s.cfg); limitError != "" {
+		result = "error"
+		stopDispatch(conn)
+		conn.WriteError(limitError)
+		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			s.logger.Debug("proxy over-limit command connection close failed", "remote", conn.RemoteAddr(), "error", err)
+		}
+		return
+	}
 
 	parsed, err := ParseCommand(cmd)
 	if err != nil {
@@ -323,6 +353,7 @@ func (s *Server) handle(conn redcon.Conn, cmd redcon.Command) {
 		result = "error"
 		conn.WriteError(wrongArity(command))
 	case "QUIT":
+		stopDispatch(conn)
 		conn.WriteString("OK")
 		_ = conn.Close()
 	case "SELECT":
@@ -474,4 +505,49 @@ func (s *Server) handle(conn redcon.Conn, cmd redcon.Command) {
 		result = "error"
 		conn.WriteError(unsupported(strings.ToUpper(command)))
 	}
+}
+
+func dispatchStopped(conn redcon.Conn) bool {
+	state, ok := conn.Context().(*connectionState)
+	return ok && state.dispatchStopped
+}
+
+func stopDispatch(conn redcon.Conn) {
+	state, ok := conn.Context().(*connectionState)
+	if !ok {
+		state = &connectionState{}
+		conn.SetContext(state)
+	}
+	if state.dispatchStopped {
+		return
+	}
+	state.dispatchStopped = true
+	_ = conn.ReadPipeline()
+}
+
+func commandLimitError(cmd redcon.Command, cfg config.ProxyConfig) string {
+	if commandBytesExceed(cmd, cfg.MaxCommandBytes) {
+		return "ERR command exceeds proxy.max_command_bytes"
+	}
+	if len(cmd.Args) > cfg.MaxCommandArgs {
+		return "ERR command exceeds proxy.max_command_args"
+	}
+	if len(cmd.Args) > 0 && bytes.EqualFold(cmd.Args[0], []byte("MGET")) && len(cmd.Args)-1 > cfg.MaxMGetKeys {
+		return "ERR MGET exceeds proxy.max_mget_keys"
+	}
+	return ""
+}
+
+func commandBytesExceed(cmd redcon.Command, maximum int) bool {
+	if len(cmd.Raw) > 0 {
+		return len(cmd.Raw) > maximum
+	}
+	remaining := maximum
+	for _, arg := range cmd.Args {
+		if len(arg) > remaining {
+			return true
+		}
+		remaining -= len(arg)
+	}
+	return false
 }

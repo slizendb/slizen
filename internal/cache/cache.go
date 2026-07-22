@@ -156,7 +156,10 @@ func (c *Cache) get(key string, grace time.Duration, allowStale bool) (EntrySnap
 		expiryLimit = expiryLimit.Add(grace)
 	}
 	if !now.Before(expiryLimit) {
-		if !allowStale {
+		// GetStale(key, 0) is the fresh-read path while stale fallback is
+		// enabled. Keep the expired value for a later upstream-error read, but
+		// remove it once a real grace-period lookup proves it unusable.
+		if !allowStale || grace != 0 {
 			c.removeElementLocked(el)
 		}
 		return EntrySnapshot{}, false
@@ -195,12 +198,13 @@ func (c *Cache) Close() {
 	c.bytes = 0
 }
 
-// Stats reports aggregate cache state.
+// Stats reports aggregate retained cache state. Expired values may remain
+// retained, within the configured memory bounds, so stale fallback can use
+// them without an unrelated metrics read destroying the data.
 func (c *Cache) Stats() Stats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.pruneExpiredLocked(c.clock.Now())
 	return Stats{
 		Entries:   len(c.items),
 		Bytes:     c.bytes,
@@ -222,7 +226,6 @@ func (c *Cache) Inspect(key string) (EntrySnapshot, bool) {
 	}
 	ent := el.Value.(*entry)
 	if !now.Before(ent.expiresAt) {
-		c.removeElementLocked(el)
 		return EntrySnapshot{}, false
 	}
 	return ent.snapshot(now), true
@@ -236,17 +239,6 @@ func (c *Cache) enforceLimitsLocked() {
 		}
 		c.removeElementLocked(oldest)
 		c.evictions++
-	}
-}
-
-func (c *Cache) pruneExpiredLocked(now time.Time) {
-	for el := c.lru.Back(); el != nil; {
-		prev := el.Prev()
-		ent := el.Value.(*entry)
-		if !now.Before(ent.expiresAt) {
-			c.removeElementLocked(el)
-		}
-		el = prev
 	}
 }
 

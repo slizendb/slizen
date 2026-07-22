@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -31,6 +34,7 @@ const (
 	maxWorkloadConcurrency = 1024
 	maxWorkloadRequests    = 1_000_000
 	maxWorkloadKeys        = 100_000
+	minWorkloadValueBytes  = 16
 	maxWorkloadValueBytes  = 1 << 20
 	maxWorkloadDataset     = 256 << 20
 	maxWorkloadDuration    = time.Hour
@@ -61,22 +65,26 @@ type benchmarkResult struct {
 }
 
 type benchmarkPhase struct {
-	Name            string   `json:"name"`
-	Address         string   `json:"address"`
-	Requests        uint64   `json:"requests"`
-	Reads           uint64   `json:"reads,omitempty"`
-	Writes          uint64   `json:"writes,omitempty"`
-	Failures        uint64   `json:"failures"`
-	ElapsedSeconds  float64  `json:"elapsed_seconds"`
-	OpsPerSecond    float64  `json:"ops_per_second"`
-	P50Milliseconds float64  `json:"p50_ms"`
-	P95Milliseconds float64  `json:"p95_ms"`
-	P99Milliseconds float64  `json:"p99_ms"`
-	UpstreamGETs    uint64   `json:"upstream_gets"`
-	CacheHits       uint64   `json:"cache_hits"`
-	CacheMisses     uint64   `json:"cache_misses"`
-	CacheHitRatio   float64  `json:"cache_hit_ratio_percent"`
-	Notes           []string `json:"notes,omitempty"`
+	Name                 string   `json:"name"`
+	Address              string   `json:"address"`
+	Requests             uint64   `json:"requests"`
+	Reads                uint64   `json:"reads,omitempty"`
+	Writes               uint64   `json:"writes,omitempty"`
+	Failures             uint64   `json:"failures"`
+	ValueMismatches      uint64   `json:"value_mismatches"`
+	ValidationReads      uint64   `json:"validation_reads"`
+	ValidationFailures   uint64   `json:"validation_failures"`
+	ValidationMismatches uint64   `json:"validation_mismatches"`
+	ElapsedSeconds       float64  `json:"elapsed_seconds"`
+	OpsPerSecond         float64  `json:"ops_per_second"`
+	P50Milliseconds      float64  `json:"p50_ms"`
+	P95Milliseconds      float64  `json:"p95_ms"`
+	P99Milliseconds      float64  `json:"p99_ms"`
+	UpstreamGETs         uint64   `json:"upstream_gets"`
+	CacheHits            uint64   `json:"cache_hits"`
+	CacheMisses          uint64   `json:"cache_misses"`
+	CacheHitRatio        float64  `json:"cache_hit_ratio_percent"`
+	Notes                []string `json:"notes,omitempty"`
 }
 
 type runtimeVersions struct {
@@ -144,10 +152,68 @@ type workloadScenarioResult struct {
 }
 
 type workloadWorkerResult struct {
-	latencies []time.Duration
-	reads     uint64
-	writes    uint64
-	failures  uint64
+	latencies       []time.Duration
+	reads           uint64
+	writes          uint64
+	failures        uint64
+	valueMismatches uint64
+}
+
+type workloadValues struct {
+	size    int
+	digests [][sha256.Size]byte
+}
+
+type workloadKeyState struct {
+	mu      sync.RWMutex
+	version uint64
+}
+
+func newWorkloadValues(keys []string, size int) workloadValues {
+	digests := make([][sha256.Size]byte, len(keys))
+	for i, key := range keys {
+		digests[i] = sha256.Sum256([]byte(key))
+	}
+	return workloadValues{size: size, digests: digests}
+}
+
+func (v workloadValues) Fill(keyIndex int, version uint64, dst []byte) []byte {
+	if cap(dst) < v.size {
+		dst = make([]byte, v.size)
+	} else {
+		dst = dst[:v.size]
+	}
+	digest := v.versionDigest(keyIndex, version)
+	for offset := 0; offset < len(dst); offset += len(digest) {
+		copy(dst[offset:], digest[:])
+	}
+	binary.LittleEndian.PutUint64(dst[:8], version)
+	copy(dst[8:16], v.digests[keyIndex][:8])
+	return dst
+}
+
+func (v workloadValues) Matches(keyIndex int, version uint64, value []byte) bool {
+	if len(value) != v.size {
+		return false
+	}
+	if binary.LittleEndian.Uint64(value[:8]) != version || !bytes.Equal(value[8:16], v.digests[keyIndex][:8]) {
+		return false
+	}
+	digest := v.versionDigest(keyIndex, version)
+	for i, b := range value[16:] {
+		position := i + 16
+		if b != digest[position%len(digest)] {
+			return false
+		}
+	}
+	return true
+}
+
+func (v workloadValues) versionDigest(keyIndex int, version uint64) [sha256.Size]byte {
+	var input [sha256.Size + 8]byte
+	copy(input[:sha256.Size], v.digests[keyIndex][:])
+	binary.LittleEndian.PutUint64(input[sha256.Size:], version)
+	return sha256.Sum256(input[:])
 }
 
 type statusSnapshot struct {
@@ -307,8 +373,8 @@ func validateWorkloadConfig(cfg workloadConfig) error {
 	if cfg.Scenario == workloadScenarioSkew80 && cfg.KeyCount < 5 {
 		return errors.New("keys must be at least 5 for the skew-80-20 scenario")
 	}
-	if cfg.ValueSize < 1 || cfg.ValueSize > maxWorkloadValueBytes {
-		return fmt.Errorf("value-size must be between 1 and %d bytes", maxWorkloadValueBytes)
+	if cfg.ValueSize < minWorkloadValueBytes || cfg.ValueSize > maxWorkloadValueBytes {
+		return fmt.Errorf("value-size must be between %d and %d bytes", minWorkloadValueBytes, maxWorkloadValueBytes)
 	}
 	scenarioCount := len(selectedWorkloadScenarios(cfg.Scenario))
 	if int64(cfg.KeyCount)*int64(cfg.ValueSize)*int64(scenarioCount) > maxWorkloadDataset {
@@ -408,6 +474,7 @@ func runWorkloadBenchmark(cfg workloadConfig) (workloadBenchmarkResult, error) {
 		Notes: []string{
 			"results describe this run and configuration only; they are not universal capacity or latency claims",
 			"isolated_key_prefix is unique to this invocation so cache and adaptive hotness state start clean for every repeated run",
+			"successful GETs are checked against deterministic key-and-write-version payloads; per-key ordering and final validation make stale-after-write responses invalidate the evidence",
 		},
 	}
 	if versionErr != nil {
@@ -417,21 +484,21 @@ func runWorkloadBenchmark(cfg workloadConfig) (workloadBenchmarkResult, error) {
 		result.Notes = append(result.Notes, "Slizen is not in cache mode; local cache hits and origin GET reduction are not expected")
 	}
 
-	value := make([]byte, cfg.ValueSize)
-	for i := range value {
-		value[i] = byte('a' + i%26)
-	}
 	for _, scenario := range selectedWorkloadScenarios(cfg.Scenario) {
 		keys := buildWorkloadKeys(isolatedKeyPrefix, scenario, cfg.KeyCount)
-		if err := seedWorkloadKeys(context.Background(), origin, keys, value); err != nil {
+		values := newWorkloadValues(keys, cfg.ValueSize)
+		if err := seedWorkloadKeys(context.Background(), origin, keys, values); err != nil {
 			return workloadBenchmarkResult{}, fmt.Errorf("seed %s workload: %w", scenario, err)
 		}
 
-		originPhase, err := runRedisWorkload("origin direct", cfg.OriginAddr, keys, value, scenario, cfg)
+		originPhase, err := runRedisWorkload("origin direct", cfg.OriginAddr, keys, values, scenario, cfg)
 		if err != nil {
 			return workloadBenchmarkResult{}, fmt.Errorf("run %s origin phase: %w", scenario, err)
 		}
 		originPhase.UpstreamGETs = originPhase.Reads
+		if err := seedWorkloadKeys(context.Background(), origin, keys, values); err != nil {
+			return workloadBenchmarkResult{}, fmt.Errorf("reset %s workload before Slizen phase: %w", scenario, err)
+		}
 
 		proxyClients, err := newWorkloadClients(cfg.ProxyAddr, cfg.Concurrency)
 		if err != nil {
@@ -446,7 +513,7 @@ func runWorkloadBenchmark(cfg workloadConfig) (workloadBenchmarkResult, error) {
 			closeErr := closeWorkloadClients(proxyClients)
 			return workloadBenchmarkResult{}, errors.Join(err, closeErr)
 		}
-		slizenPhase, err := runRedisWorkloadWithClients("slizen", cfg.ProxyAddr, proxyClients, keys, value, scenario, cfg)
+		slizenPhase, err := runRedisWorkloadWithClients("slizen", cfg.ProxyAddr, proxyClients, keys, values, scenario, cfg)
 		closeErr := closeWorkloadClients(proxyClients)
 		if err != nil {
 			err = fmt.Errorf("run %s Slizen phase: %w", scenario, err)
@@ -477,8 +544,8 @@ func buildWorkloadKeys(prefix, scenario string, count int) []string {
 	return keys
 }
 
-func seedWorkloadKeys(ctx context.Context, client *redis.Client, keys []string, value []byte) error {
-	batchSize := seedPipelineBytes / len(value)
+func seedWorkloadKeys(ctx context.Context, client *redis.Client, keys []string, values workloadValues) error {
+	batchSize := seedPipelineBytes / values.size
 	if batchSize < 1 {
 		batchSize = 1
 	}
@@ -488,8 +555,8 @@ func seedWorkloadKeys(ctx context.Context, client *redis.Client, keys []string, 
 	for start := 0; start < len(keys); start += batchSize {
 		end := minInt(start+batchSize, len(keys))
 		pipe := client.Pipeline()
-		for _, key := range keys[start:end] {
-			pipe.Set(ctx, key, value, 0)
+		for index := start; index < end; index++ {
+			pipe.Set(ctx, keys[index], values.Fill(index, 0, nil), 0)
 		}
 		if _, err := pipe.Exec(ctx); err != nil {
 			return err
@@ -498,12 +565,12 @@ func seedWorkloadKeys(ctx context.Context, client *redis.Client, keys []string, 
 	return nil
 }
 
-func runRedisWorkload(name, addr string, keys []string, value []byte, scenario string, cfg workloadConfig) (benchmarkPhase, error) {
+func runRedisWorkload(name, addr string, keys []string, values workloadValues, scenario string, cfg workloadConfig) (benchmarkPhase, error) {
 	clients, err := newWorkloadClients(addr, cfg.Concurrency)
 	if err != nil {
 		return benchmarkPhase{}, err
 	}
-	phase, runErr := runRedisWorkloadWithClients(name, addr, clients, keys, value, scenario, cfg)
+	phase, runErr := runRedisWorkloadWithClients(name, addr, clients, keys, values, scenario, cfg)
 	return phase, errors.Join(runErr, closeWorkloadClients(clients))
 }
 
@@ -551,7 +618,7 @@ func closeWorkloadClients(clients []*redis.Client) error {
 	return errors.Join(errs...)
 }
 
-func runRedisWorkloadWithClients(name, addr string, clients []*redis.Client, keys []string, value []byte, scenario string, cfg workloadConfig) (benchmarkPhase, error) {
+func runRedisWorkloadWithClients(name, addr string, clients []*redis.Client, keys []string, values workloadValues, scenario string, cfg workloadConfig) (benchmarkPhase, error) {
 	if len(clients) != cfg.Concurrency {
 		return benchmarkPhase{}, fmt.Errorf("workload client count %d does not match concurrency %d", len(clients), cfg.Concurrency)
 	}
@@ -559,6 +626,7 @@ func runRedisWorkloadWithClients(name, addr string, clients []*redis.Client, key
 	defer cancel()
 	var issued atomic.Uint64
 	workers := make([]workloadWorkerResult, cfg.Concurrency)
+	keyStates := make([]workloadKeyState, len(keys))
 	start := time.Now()
 
 	var wg sync.WaitGroup
@@ -569,6 +637,8 @@ func runRedisWorkloadWithClients(name, addr string, clients []*redis.Client, key
 			defer wg.Done()
 			client := clients[workerIndex]
 			worker := &workers[workerIndex]
+			valueBuffer := make([]byte, values.size)
+			operationCtx := context.Background()
 			for {
 				if ctx.Err() != nil {
 					return
@@ -580,16 +650,29 @@ func runRedisWorkloadWithClients(name, addr string, clients []*redis.Client, key
 				keyIndex, read := workloadRequestAt(scenario, cfg, operationIndex)
 				requestStart := time.Now()
 				var err error
+				valueMismatch := false
+				state := &keyStates[keyIndex]
 				if read {
-					err = client.Get(ctx, keys[keyIndex]).Err()
+					state.mu.RLock()
+					expectedVersion := state.version
+					var value []byte
+					value, err = client.Get(operationCtx, keys[keyIndex]).Bytes()
+					valueMismatch = err == nil && !values.Matches(keyIndex, expectedVersion, value)
+					state.mu.RUnlock()
 				} else {
-					err = client.Set(ctx, keys[keyIndex], value, 0).Err()
+					state.mu.Lock()
+					nextVersion := state.version + 1
+					err = client.Set(operationCtx, keys[keyIndex], values.Fill(keyIndex, nextVersion, valueBuffer), 0).Err()
+					if err == nil {
+						state.version = nextVersion
+					}
+					state.mu.Unlock()
 				}
 				elapsed := time.Since(requestStart)
-				if err != nil {
+				if err != nil || valueMismatch {
 					worker.failures++
-					if ctx.Err() != nil {
-						return
+					if valueMismatch {
+						worker.valueMismatches++
 					}
 					continue
 				}
@@ -603,29 +686,45 @@ func runRedisWorkloadWithClients(name, addr string, clients []*redis.Client, key
 		}()
 	}
 	wg.Wait()
+	validation, validationReads, err := validateWrittenWorkloadValues(clients, keys, values, keyStates, cfg.Duration)
+	if err != nil {
+		return benchmarkPhase{}, err
+	}
 	elapsed := time.Since(start)
 
 	latencies := make([]time.Duration, 0, minInt(cfg.MaxRequests, int(issued.Load())))
-	var reads, writes, failures uint64
+	var reads, writes, failures, valueMismatches uint64
 	for _, worker := range workers {
 		latencies = append(latencies, worker.latencies...)
 		reads += worker.reads
 		writes += worker.writes
 		failures += worker.failures
+		valueMismatches += worker.valueMismatches
 	}
+	latencies = append(latencies, validation.latencies...)
+	reads += validation.reads
+	failures += validation.failures
+	valueMismatches += validation.valueMismatches
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 	requests := reads + writes
 	phase := benchmarkPhase{
-		Name:            name,
-		Address:         addr,
-		Requests:        requests,
-		Reads:           reads,
-		Writes:          writes,
-		Failures:        failures,
-		ElapsedSeconds:  elapsed.Seconds(),
-		P50Milliseconds: percentileMillis(latencies, 50),
-		P95Milliseconds: percentileMillis(latencies, 95),
-		P99Milliseconds: percentileMillis(latencies, 99),
+		Name:                 name,
+		Address:              addr,
+		Requests:             requests,
+		Reads:                reads,
+		Writes:               writes,
+		Failures:             failures,
+		ValueMismatches:      valueMismatches,
+		ValidationReads:      validationReads,
+		ValidationFailures:   validation.failures,
+		ValidationMismatches: validation.valueMismatches,
+		ElapsedSeconds:       elapsed.Seconds(),
+		P50Milliseconds:      percentileMillis(latencies, 50),
+		P95Milliseconds:      percentileMillis(latencies, 95),
+		P99Milliseconds:      percentileMillis(latencies, 99),
+	}
+	if validationReads > 0 {
+		phase.Notes = append(phase.Notes, fmt.Sprintf("validated the final write generation for %d keys", validationReads))
 	}
 	if elapsed > 0 {
 		phase.OpsPerSecond = float64(requests) / elapsed.Seconds()
@@ -634,6 +733,81 @@ func runRedisWorkloadWithClients(name, addr string, clients []*redis.Client, key
 		return phase, errors.New("phase completed without a successful operation")
 	}
 	return phase, nil
+}
+
+func validateWrittenWorkloadValues(clients []*redis.Client, keys []string, values workloadValues, states []workloadKeyState, duration time.Duration) (workloadWorkerResult, uint64, error) {
+	type validationKey struct {
+		index   int
+		version uint64
+	}
+	changed := make([]validationKey, 0, len(states))
+	for index := range states {
+		if states[index].version > 0 {
+			changed = append(changed, validationKey{index: index, version: states[index].version})
+		}
+	}
+	if len(changed) == 0 {
+		return workloadWorkerResult{}, 0, nil
+	}
+
+	validationTimeout := duration
+	if validationTimeout < 10*time.Second {
+		validationTimeout = 10 * time.Second
+	}
+	if validationTimeout > time.Minute {
+		validationTimeout = time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), validationTimeout)
+	defer cancel()
+
+	workerCount := minInt(len(clients), len(changed))
+	workers := make([]workloadWorkerResult, workerCount)
+	var issued atomic.Uint64
+	var attempted atomic.Uint64
+	var wg sync.WaitGroup
+	wg.Add(workerCount)
+	for workerIndex := 0; workerIndex < workerCount; workerIndex++ {
+		workerIndex := workerIndex
+		go func() {
+			defer wg.Done()
+			worker := &workers[workerIndex]
+			client := clients[workerIndex]
+			for {
+				position := issued.Add(1) - 1
+				if position >= uint64(len(changed)) || ctx.Err() != nil {
+					return
+				}
+				key := changed[position]
+				attempted.Add(1)
+				started := time.Now()
+				value, err := client.Get(ctx, keys[key.index]).Bytes()
+				elapsed := time.Since(started)
+				mismatch := err == nil && !values.Matches(key.index, key.version, value)
+				if err != nil || mismatch {
+					worker.failures++
+					if mismatch {
+						worker.valueMismatches++
+					}
+					continue
+				}
+				worker.latencies = append(worker.latencies, elapsed)
+				worker.reads++
+			}
+		}()
+	}
+	wg.Wait()
+	if attempted.Load() != uint64(len(changed)) {
+		return workloadWorkerResult{}, attempted.Load(), fmt.Errorf("final write-generation validation timed out after checking %d of %d keys", attempted.Load(), len(changed))
+	}
+
+	result := workloadWorkerResult{}
+	for _, worker := range workers {
+		result.latencies = append(result.latencies, worker.latencies...)
+		result.reads += worker.reads
+		result.failures += worker.failures
+		result.valueMismatches += worker.valueMismatches
+	}
+	return result, attempted.Load(), nil
 }
 
 func workloadRequestAt(scenario string, cfg workloadConfig, operationIndex uint64) (keyIndex int, read bool) {
@@ -674,7 +848,7 @@ func deterministicWorkloadValue(seed int64, operationIndex, stream uint64) uint6
 }
 
 func summarizeWorkloadScenario(name string, origin, slizen benchmarkPhase, statusEvidenceValid bool) workloadScenarioResult {
-	evidenceValid := origin.Failures == 0 && slizen.Failures == 0 && statusEvidenceValid
+	evidenceValid := origin.Failures == 0 && slizen.Failures == 0 && origin.ValueMismatches == 0 && slizen.ValueMismatches == 0 && statusEvidenceValid
 	reduction := 0.0
 	cacheHitRatio := 0.0
 	if evidenceValid {
@@ -695,6 +869,9 @@ func summarizeWorkloadScenario(name string, origin, slizen benchmarkPhase, statu
 	}
 	if origin.Failures > 0 || slizen.Failures > 0 {
 		result.Notes = append(result.Notes, "origin GET reduction was suppressed because one or both phases recorded failed operations")
+	}
+	if origin.ValueMismatches > 0 || slizen.ValueMismatches > 0 {
+		result.Notes = append(result.Notes, "origin GET reduction was suppressed because one or both phases returned an unexpected value")
 	}
 	if !statusEvidenceValid {
 		result.Notes = append(result.Notes, "origin GET reduction was suppressed because Slizen process-global counters did not provide isolated, monotonic evidence")
@@ -805,7 +982,16 @@ func printWorkloadBenchmarkText(w io.Writer, result workloadBenchmarkResult) {
 				phase.CacheHitRatio,
 			)
 		}
-		fmt.Fprintf(w, "  result: origin_get_reduction=%.1f%% cache_hit_ratio=%.1f%% evidence_valid=%t proved=%t\n", scenario.OriginGETReductionPercent, scenario.CacheHitRatioPercent, scenario.EvidenceValid, scenario.ProvedOriginGETReduction)
+		fmt.Fprintf(w, "  result: origin_get_reduction=%.1f%% cache_hit_ratio=%.1f%% value_mismatches=%d validation_reads=%d validation_failures=%d validation_mismatches=%d evidence_valid=%t proved=%t\n",
+			scenario.OriginGETReductionPercent,
+			scenario.CacheHitRatioPercent,
+			scenario.Origin.ValueMismatches+scenario.Slizen.ValueMismatches,
+			scenario.Origin.ValidationReads+scenario.Slizen.ValidationReads,
+			scenario.Origin.ValidationFailures+scenario.Slizen.ValidationFailures,
+			scenario.Origin.ValidationMismatches+scenario.Slizen.ValidationMismatches,
+			scenario.EvidenceValid,
+			scenario.ProvedOriginGETReduction,
+		)
 		for _, note := range scenario.Notes {
 			fmt.Fprintf(w, "  note: %s\n", note)
 		}
@@ -849,7 +1035,7 @@ func runHotKeyBenchmark(originAddr, proxyAddr, adminURL, key, value string, warm
 		result.Notes = append(result.Notes, versionErr.Error())
 	}
 
-	originPhase, err := runRedisGetLoad("origin direct", originAddr, key, concurrency, requests, duration)
+	originPhase, err := runRedisGetLoad("origin direct", originAddr, key, value, concurrency, requests, duration)
 	if err != nil {
 		return benchmarkResult{}, err
 	}
@@ -864,7 +1050,7 @@ func runHotKeyBenchmark(originAddr, proxyAddr, adminURL, key, value string, warm
 	if err != nil {
 		return benchmarkResult{}, err
 	}
-	coldPhase, err := runRedisGetLoad("slizen cold", proxyAddr, key, concurrency, coldRequests, minDuration(duration, maxDuration(500*time.Millisecond, warmup)))
+	coldPhase, err := runRedisGetLoad("slizen cold", proxyAddr, key, value, concurrency, coldRequests, minDuration(duration, maxDuration(500*time.Millisecond, warmup)))
 	if err != nil {
 		return benchmarkResult{}, err
 	}
@@ -892,7 +1078,7 @@ func runHotKeyBenchmark(originAddr, proxyAddr, adminURL, key, value string, warm
 	if err != nil {
 		return benchmarkResult{}, err
 	}
-	hotPhase, err := runRedisGetLoad("slizen hot", proxyAddr, key, concurrency, requests, duration)
+	hotPhase, err := runRedisGetLoad("slizen hot", proxyAddr, key, value, concurrency, requests, duration)
 	if err != nil {
 		return benchmarkResult{}, err
 	}
@@ -906,7 +1092,7 @@ func runHotKeyBenchmark(originAddr, proxyAddr, adminURL, key, value string, warm
 
 	result.CacheHitRatio = hotPhase.CacheHitRatio
 	result.UpstreamGetReduction = upstreamReduction(originPhase, hotPhase)
-	result.ProvedReduction = result.UpstreamGetReduction > 0 && result.CacheHitRatio > 0 && hotPhase.UpstreamGETs < hotPhase.Requests
+	result.ProvedReduction = originPhase.Failures == 0 && hotPhase.Failures == 0 && originPhase.ValueMismatches == 0 && hotPhase.ValueMismatches == 0 && result.UpstreamGetReduction > 0 && result.CacheHitRatio > 0 && hotPhase.UpstreamGETs < hotPhase.Requests
 	if !result.ProvedReduction {
 		result.Notes = append(result.Notes, "benchmark did not prove upstream GET reduction for this run/configuration")
 	}
@@ -915,12 +1101,14 @@ func runHotKeyBenchmark(originAddr, proxyAddr, adminURL, key, value string, warm
 	return result, nil
 }
 
-func runRedisGetLoad(name, addr, key string, concurrency, maxRequests int, duration time.Duration) (benchmarkPhase, error) {
+func runRedisGetLoad(name, addr, key, expectedValue string, concurrency, maxRequests int, duration time.Duration) (benchmarkPhase, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
+	expected := []byte(expectedValue)
 	var issued atomic.Uint64
 	var successes atomic.Uint64
 	var failures atomic.Uint64
+	var valueMismatches atomic.Uint64
 	latencies := make(chan time.Duration, maxRequests)
 	start := time.Now()
 
@@ -942,10 +1130,15 @@ func runRedisGetLoad(name, addr, key string, concurrency, maxRequests int, durat
 					return
 				}
 				reqStart := time.Now()
-				err := client.Get(ctx, key).Err()
+				value, err := client.Get(ctx, key).Bytes()
 				elapsed := time.Since(reqStart)
 				if err != nil {
 					failures.Add(1)
+					continue
+				}
+				if !bytes.Equal(value, expected) {
+					failures.Add(1)
+					valueMismatches.Add(1)
 					continue
 				}
 				successes.Add(1)
@@ -972,6 +1165,7 @@ func runRedisGetLoad(name, addr, key string, concurrency, maxRequests int, durat
 		Address:         addr,
 		Requests:        requests,
 		Failures:        failures.Load(),
+		ValueMismatches: valueMismatches.Load(),
 		ElapsedSeconds:  elapsed.Seconds(),
 		OpsPerSecond:    ops,
 		P50Milliseconds: percentileMillis(values, 50),
@@ -1117,7 +1311,7 @@ func invalidStatusDeltaReason(before, after statusSnapshot) string {
 }
 
 func upstreamReduction(origin, hot benchmarkPhase) float64 {
-	if origin.Requests == 0 || hot.Requests == 0 {
+	if origin.Requests == 0 || hot.Requests == 0 || origin.Failures > 0 || hot.Failures > 0 || origin.ValueMismatches > 0 || hot.ValueMismatches > 0 {
 		return 0
 	}
 	originRate := float64(origin.UpstreamGETs) / float64(origin.Requests)

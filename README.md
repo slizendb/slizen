@@ -10,6 +10,10 @@ Slizen is a self-hosted adaptive cache layer for read-heavy Redis and Valkey wor
 
 Slizen v0.2 is single-node, not a source of truth, and has limited Redis compatibility. Direct upstream writes may remain stale until local TTL expiration. The admin API binds locally by default and has no built-in authentication in v0.2.
 
+**Evidence, not a speed claim.** In one reproducible v0.2.0 synthetic 99/1-skew run, Slizen measured **91.376% fewer origin GETs per successful read**. Proxy p99 was `0.624 ms` versus `0.377 ms` direct, so this does not claim that Slizen was faster. See the [raw release JSON](https://github.com/slizendb/slizen/releases/download/v0.2.0/slizen-workload-result.json) and [methodology](docs/BENCHMARKING.md); results are specific to that machine, configuration, and workload.
+
+We are looking for three design partners with real Redis or Valkey hot-key incidents. If you can test a single-node developer preview in an isolated environment, [describe the workload without sensitive data](https://github.com/slizendb/slizen/issues/new?template=design-partner.yml).
+
 ```mermaid
 flowchart LR
   App["Redis client"] --> Slizen["Slizen RESP proxy :6380"]
@@ -20,7 +24,31 @@ flowchart LR
   Prom["Prometheus"] --> Admin
 ```
 
-## Quick Start
+## Install
+
+The public multi-architecture image is published on GHCR. `0.2` tracks the latest v0.2 patch; use the immutable digest recorded by release evidence for a reproducible deployment.
+
+```sh
+docker pull ghcr.io/slizendb/slizen:0.2
+```
+
+Run observe-only against Redis or Valkey on the host:
+
+```sh
+docker run --rm \
+  --add-host=host.docker.internal:host-gateway \
+  -p 127.0.0.1:6380:6380 \
+  -p 127.0.0.1:9090:9090 \
+  -e SLIZEN_MODE=observe \
+  -e SLIZEN_PROXY_LISTEN=0.0.0.0:6380 \
+  -e SLIZEN_ADMIN_LISTEN=0.0.0.0:9090 \
+  -e SLIZEN_UPSTREAM_ADDRESS=host.docker.internal:6379 \
+  ghcr.io/slizendb/slizen:0.2
+```
+
+See the [latest release](https://github.com/slizendb/slizen/releases/latest), [v0.2.1 release notes](docs/RELEASE_NOTES_v0.2.1.md), and [configuration safety guide](docs/CONFIGURATION.md).
+
+## Quick Start From Source
 
 Requires Docker Compose.
 
@@ -43,28 +71,32 @@ redis-cli -p 6380 GET product:iphone_17
 go run ./cmd/slizenctl status --admin http://127.0.0.1:9090
 ```
 
+The Compose demo deliberately overrides the safe default and enables `cache` mode against its disposable Valkey container.
+
 ## Operating Modes
 
-Slizen starts in `cache` mode by default:
+Slizen starts in `observe` mode by default:
 
 ```toml
-mode = "cache"
+mode = "observe"
 ```
 
-Set `mode = "observe"` or `SLIZEN_MODE=observe` to run Slizen as an observation-only proxy. In observe mode, Slizen still forwards commands, records bounded hot-key telemetry, updates `/v1/status`, `/v1/hotkeys`, and Prometheus metrics, but never serves local cache hits, never coalesces `GET` requests, and never stores values in the local cache. This is the safest first staging deployment mode when you want to understand key heat before allowing adaptive local caching.
+In observe mode, Slizen still forwards commands, records bounded hot-key telemetry, updates `/v1/status`, `/v1/hotkeys`, and Prometheus metrics, but never serves local cache hits, never coalesces `GET` requests, and never stores values in the local cache. This is the safest first staging deployment mode when you want to understand key heat before allowing adaptive local caching.
 
 ### Per-prefix cache policy
 
-Optional rules under `[[cache.policies]]` use literal, case-sensitive longest-prefix matching:
+Optional rules under `[[cache.policies]]` use literal, case-sensitive longest-prefix matching. To promote selected prefixes, switch the global mode to `cache`, retain an empty-prefix `observe` catch-all, and add narrower cache rules:
 
 ```toml
+mode = "cache"
+
+[[cache.policies]]
+prefix = ""
+mode = "observe"
+
 [[cache.policies]]
 prefix = "session:"
 mode = "deny"
-
-[[cache.policies]]
-prefix = "catalog:"
-mode = "observe"
 
 [[cache.policies]]
 prefix = "catalog:featured:"
@@ -73,7 +105,7 @@ max_item_bytes = 1048576
 max_local_ttl = "10s"
 ```
 
-`deny` bypasses local caching and hotness tracking but still forwards Redis reads and writes; it is not an ACL. `observe` tracks heat but always reads upstream. `cache` enables adaptive caching and requires explicit item-size and fresh-TTL caps. `max_item_bytes` uses Slizen's estimated stored entry size, including key bytes and entry overhead. An empty prefix is a catch-all, unmatched keys inherit the global mode, and `mode = "observe"` remains a safety ceiling that disables local caching even for matching `cache` rules. Configuration is capped at 1,024 policies, 1,024 bytes per prefix, 262,144 prefix bytes in total, and 100,000 tracked keys. Redis keys longer than 1,024 bytes are still forwarded for supported commands but are deliberately excluded from hotness telemetry and local caching. See [ADR 0004](docs/adr/0004-per-prefix-cache-policy.md) for the complete policy contract.
+`deny` bypasses local caching and hotness tracking but still forwards Redis reads and writes; it is not an ACL. `observe` tracks heat but always reads upstream. `cache` enables adaptive caching and requires explicit item-size and fresh-TTL caps. `max_item_bytes` uses Slizen's estimated stored entry size, including key bytes and entry overhead. An empty prefix is a catch-all, unmatched keys inherit the global mode, and global `mode = "observe"` remains a safety ceiling that disables local caching even for matching `cache` rules. Configuration is capped at 1,024 policies, 1,024 bytes per prefix, 262,144 prefix bytes in total, and 100,000 tracked keys. Redis keys longer than 1,024 bytes are still forwarded for supported commands but are deliberately excluded from hotness telemetry and local caching. See [configuration safety](docs/CONFIGURATION.md) and [ADR 0004](docs/adr/0004-per-prefix-cache-policy.md) for the complete contract.
 
 ## Docker Compose Demo
 
@@ -155,7 +187,7 @@ curl http://127.0.0.1:9090/metrics
 
 `/v1/audit` returns a bounded, machine-readable hot-key report with stable recommendation reason codes. It includes effective policy modes but never policy prefixes or Redis values; key identifiers follow `privacy.key_visibility` and are HMAC-based by default. `telemetry_complete=false` means the requested limit truncated the current set, tracking evicted a key, or at least one key over the 1,024-byte tracking limit was skipped. The same report is available through `go run ./cmd/slizenctl audit --admin http://127.0.0.1:9090`.
 
-`/v1/status` includes the active mode. Prometheus metrics include request counts and latency, cache hits and misses, cache bytes and entries, evictions, upstream requests and errors, hot-key count, promotions, demotions, invalidations, coalesced requests, and skipped oversized hotness observations. Redis keys are never used as labels.
+`/v1/status` includes the active mode. Prometheus metrics include request counts and latency, cache hits and misses, retained cache bytes and entries, evictions, upstream requests and errors, hot-key count, promotions, demotions, invalidations, coalesced requests, and skipped oversized hotness observations. Expired entries may remain in bounded cache storage until access or eviction, including while eligible for an explicitly configured stale-grace fallback. Redis keys are never used as labels.
 
 ## Cache Administration
 
@@ -175,7 +207,7 @@ make benchmark-workload
 make demo-report
 ```
 
-The benchmark compares direct origin GETs with Slizen cold and hot reads, then reports cache hit ratio and upstream GET reduction from real `/v1/status` counters. See [docs/BENCHMARKING.md](docs/BENCHMARKING.md).
+The benchmark compares direct origin GETs with Slizen cold and hot reads, then reports cache hit ratio and origin GET reduction from real `/v1/status` counters. The workload suite verifies every successful GET against a deterministic key-specific payload; any value mismatch invalidates the evidence. See [docs/BENCHMARKING.md](docs/BENCHMARKING.md).
 
 Go microbenchmarks:
 
@@ -218,6 +250,7 @@ Release prep:
 - [docs/PUBLIC_RELEASE_CHECKLIST.md](docs/PUBLIC_RELEASE_CHECKLIST.md)
 - [docs/RELEASE_NOTES_v0.1.md](docs/RELEASE_NOTES_v0.1.md)
 - [docs/RELEASE_NOTES_v0.2.md](docs/RELEASE_NOTES_v0.2.md)
+- [docs/RELEASE_NOTES_v0.2.1.md](docs/RELEASE_NOTES_v0.2.1.md)
 
 ## Limitations
 
@@ -227,16 +260,16 @@ Release prep:
 - Direct upstream writes may remain stale until local TTL expiration.
 - Slizen is not fully Redis-compatible.
 - `observe` mode is intended for safe heat discovery and does not reduce upstream read load.
-- Negative caching is disabled by default.
+- Negative caching is not implemented in v0.2.1; the reserved `cache.negative_ttl` setting must remain `0s`.
 - Admin API authentication is not built in.
 - Production use requires careful workload testing.
 
 ## Roadmap
 
-v0.2 focuses on safe staging: per-prefix policies, a privacy-safe hot-key audit, reproducible skewed workloads, and Kubernetes sidecar/Helm packaging. v0.3 moves direct-origin invalidation forward with Redis/Valkey server-assisted tracking and fail-safe behavior. Mesh, an Operator, and a hosted control plane are later hypotheses that require evidence from real users rather than version promises.
+v0.2 is the released safe-staging preview. v0.2.1 launch hardening is in progress; it preserves that scope while tightening safe defaults, bounds, evidence, and release hygiene. v0.3 moves direct-origin invalidation forward with Redis/Valkey server-assisted tracking and fail-safe behavior. Mesh, an Operator, and a hosted control plane are later hypotheses that require evidence from real users rather than version promises.
 
 Gossip does not provide write consensus. Slizen remains a cache layer.
 
 ## License
 
-Apache-2.0. Copyright 2026 SlizenDB contributors.
+Apache-2.0. Copyright 2026 SlizenDB contributors. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

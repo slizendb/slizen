@@ -71,8 +71,11 @@ If authentication is required, create the Secret through the cluster's normal
 secret manager and set `upstream.existingSecret.name`. The chart reads optional
 `username` and `password` keys but never creates credentials. Put a stable HMAC
 key in a separate Secret and set `privacy.existingSecret.name` if hot-key IDs
-must remain comparable across Pod restarts. Secret-backed environment variables
-are read at process start; roll the Slizen Pod after rotating either Secret.
+must remain comparable across Pod restarts. If it is omitted, Slizen generates a
+cryptographically random process-local HMAC secret and IDs intentionally change
+after every restart. Secret-backed environment variables are read at process
+start; roll the Slizen Pod after rotating either Secret. Secrets are never
+included in startup logs.
 
 For the sidecar pattern, edit the copied ConfigMap's upstream address, pin the
 image digest, add the existing Secret references, and apply the parent workload
@@ -140,8 +143,40 @@ Stay in observe mode until error rate and latency match the baseline and the
 audit covers representative traffic. Then switch to `cache` mode with explicit
 prefix rules. Start with one read-heavy, disposable prefix and conservative
 limits. Helm values use `maxItemBytes` and `maxLocalTTL`; the raw sidecar TOML
-uses `max_item_bytes` and `max_local_ttl`. Leave unsafe prefixes in `deny` or
-`observe`.
+uses `max_item_bytes` and `max_local_ttl`. Always keep an empty-prefix `observe`
+catch-all: without it, unmatched keys inherit the global `cache` mode.
+
+```yaml
+mode: cache
+cache:
+  policies:
+    - prefix: ""
+      mode: observe
+    - prefix: "catalog:public:"
+      mode: cache
+      maxItemBytes: 262144
+      maxLocalTTL: 5s
+```
+
+The equivalent raw TOML is:
+
+```toml
+mode = "cache"
+
+[[cache.policies]]
+prefix = ""
+mode = "observe"
+
+[[cache.policies]]
+prefix = "catalog:public:"
+mode = "cache"
+max_item_bytes = 262144
+max_local_ttl = "5s"
+```
+
+Leave unsafe longer prefixes in `deny` or `observe`. Validate the rendered
+configuration before the rollout and confirm that only the intended prefix
+reports policy mode `cache` in the privacy-safe audit.
 
 Direct writes to the origin can remain stale until local TTL expiry. Prefer
 writes through Slizen and do not enable `allowStaleOnUpstreamError` during the

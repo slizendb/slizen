@@ -1,0 +1,35 @@
+name: Feature proposal
+description: Propose a measured workflow or reliability improvement.
+title: "proposal: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Measured problem
+      description: What failure mode or repeated operational workflow are you seeing?
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current workaround and evidence
+      description: Include workload shape or operational evidence when available.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the outcome rather than prescribing an architecture.
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Product boundaries
+      options:
+        - label: This keeps Redis or Valkey as the source of truth.
+          required: true
+        - label: I understand that mesh, an Operator, and a hosted control plane are demand-gated rather than committed v0.2 features.
+          required: true

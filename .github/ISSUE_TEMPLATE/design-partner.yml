@@ -1,0 +1,41 @@
+name: Design-partner interest
+description: Evaluate Slizen against a real Redis or Valkey hot-key workload with the maintainers.
+title: "design partner: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share only non-sensitive deployment context here. Do not post Redis values, credentials, private hostnames, or raw keys.
+  - type: textarea
+    id: workload
+    attributes:
+      label: Workload shape
+      description: Approximate origin QPS, read/write mix, key cardinality, value sizes, and suspected skew are enough.
+    validations:
+      required: true
+  - type: textarea
+    id: pain
+    attributes:
+      label: Operational pain
+      description: What happens today during a hot-key event, and what would a successful evaluation prove?
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Evaluation environment
+      options:
+        - Local or disposable test environment
+        - Staging
+        - Production-like isolated environment
+        - Still exploring
+    validations:
+      required: true
+  - type: checkboxes
+    id: preview
+    attributes:
+      label: Developer-preview acknowledgement
+      options:
+        - label: I understand Slizen is single-node developer-preview software and Redis or Valkey remains the source of truth.
+          required: true

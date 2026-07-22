@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.2.1 - Unreleased Launch Hardening
+
+### Added
+
+- Explicit RESP request-size, argument-count, MGET-key-count, and concurrent-connection admission limits, including configuration and packaging bounds.
+- Key-and-write-version workload verification, final validation of every written key, and `value_mismatches`; stale-after-write or otherwise unexpected successful GETs now invalidate benchmark evidence.
+- Immutable-image release evidence manifest and checksums, GitHub-native OCI provenance, pinned GitHub Actions, pinned container bases, and automated dependency update configuration.
+- Go 1.26.5 as the minimum build toolchain, including the standard-library fix for GO-2026-5856.
+- GHCR install path, design-partner intake, issue and pull-request templates, CODEOWNERS, private security-report link, and canonical Apache-2.0 licensing metadata.
+
+### Changed
+
+- Zero-config startup is observe-first. Selective cache promotion now requires global `cache` mode plus an empty-prefix `observe` catch-all and explicit narrower cache policies.
+- An omitted HMAC key now produces a cryptographically random process-local secret instead of a shared placeholder; configure a secret only when identifiers must remain stable across restarts.
+- Hotness summary metrics use maintained counters, and full-tracker unseen-key admission uses bounded deterministic FIFO eviction instead of an O(n) scan under the tracker lock.
+- Cache statistics report bounded retained storage without deleting expired entries that may still be eligible for an explicitly configured stale-grace fallback.
+- Shared GET refills are independent of an individual caller but bounded by the stricter proxy/upstream read timeout and canceled on service shutdown.
+- Over-limit pipelined commands discard their parsed tail before connection close, preventing a trailing command from reaching the origin.
+- Tagged images are published only after the tagged source passes the release gate. Version and full commit stamping are checked again against the exact published image digest.
+
+### Limitations
+
+- redcon assembles one complete RESP command before Slizen can apply command byte and argument limits. The limits bound dispatch and upstream work but are not a pre-allocation parser ceiling.
+- Upstream response sizes are not bounded by the new request-admission settings.
+- High-cardinality and long-running performance evidence remains a separate engineering track; shared CI has no universal latency or capacity threshold.
+- All v0.2 developer-preview limitations still apply, including single-node operation, limited Redis compatibility, direct-origin staleness, and an unauthenticated admin API.
+
 ## v0.2.0 - Safe Staging Preview
 
 ### Added

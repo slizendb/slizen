@@ -40,3 +40,16 @@ Slizen v0.2 is a Redis-compatible read proxy for a small command subset. Redis o
 Any command not listed here should be treated as not supported in v0.2.
 
 Redis key bytes are forwarded unchanged for supported commands. To keep telemetry and memory bounded, keys longer than 1,024 bytes are not admitted to hotness tracking and cannot become locally cache-eligible. This does not reject or rewrite the upstream command; it is an explicit Slizen caching limitation surfaced by audit completeness metadata and a Prometheus counter.
+
+## Request admission limits
+
+All parsed commands are subject to bounded proxy admission before conversion or upstream dispatch:
+
+| Limit | Default | Hard configuration maximum |
+| --- | ---: | ---: |
+| Command bytes | 1 MiB | 16 MiB |
+| RESP arguments, including the command name | 1,024 | 4,096 |
+| Keys in one `MGET` | 512 | 2,048 |
+| Concurrent accepted proxy connections | 1,024 | 10,000 |
+
+An over-limit command receives a RESP error and Slizen closes that connection so its enlarged read buffer can be released. The byte and argument limits are not pre-allocation parser ceilings: redcon v1.6.2 reads one complete RESP command before invoking Slizen's handler. Upstream GET and MGET responses are fully materialized and have no separate response-byte heap cap in v0.2.1. Keep the proxy on a trusted internal network and retain a container or Pod memory limit.

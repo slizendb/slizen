@@ -9,7 +9,9 @@ import (
 )
 
 type fakeConn struct {
-	writes []string
+	writes  []string
+	closed  bool
+	context interface{}
 }
 
 func FuzzWriteAny(f *testing.F) {
@@ -64,7 +66,7 @@ func FuzzWriteAny(f *testing.F) {
 }
 
 func (f *fakeConn) RemoteAddr() string             { return "test" }
-func (f *fakeConn) Close() error                   { return nil }
+func (f *fakeConn) Close() error                   { f.closed = true; return nil }
 func (f *fakeConn) WriteError(msg string)          { f.writes = append(f.writes, "-"+msg) }
 func (f *fakeConn) WriteString(str string)         { f.writes = append(f.writes, "+"+str) }
 func (f *fakeConn) WriteBulk(bulk []byte)          { f.writes = append(f.writes, "$"+string(bulk)) }
@@ -76,8 +78,8 @@ func (f *fakeConn) WriteArray(count int)           { f.writes = append(f.writes,
 func (f *fakeConn) WriteNull()                     { f.writes = append(f.writes, "_") }
 func (f *fakeConn) WriteRaw(data []byte)           { f.writes = append(f.writes, string(data)) }
 func (f *fakeConn) WriteAny(any interface{})       {}
-func (f *fakeConn) Context() interface{}           { return nil }
-func (f *fakeConn) SetContext(v interface{})       {}
+func (f *fakeConn) Context() interface{}           { return f.context }
+func (f *fakeConn) SetContext(v interface{})       { f.context = v }
 func (f *fakeConn) SetReadBuffer(bytes int)        {}
 func (f *fakeConn) Detach() redcon.DetachedConn    { return nil }
 func (f *fakeConn) ReadPipeline() []redcon.Command { return nil }

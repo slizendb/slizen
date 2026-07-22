@@ -1,4 +1,6 @@
-mode = "cache"
+# Observe-first: reads are forwarded and measured, never stored or served from
+# the local cache. Promote only reviewed prefixes after staging validation.
+mode = "observe"
 
 [proxy]
 listen = "0.0.0.0:6380"
@@ -6,6 +8,13 @@ read_timeout = "3s"
 write_timeout = "3s"
 # Maximum graceful proxy drain before remaining connections are force-closed.
 shutdown_timeout = "10s"
+# Parsed commands above these limits are rejected and their connection closed.
+# redcon parses a complete RESP command before handing it to Slizen; see
+# docs/CONFIGURATION.md for that parser-level limitation.
+max_command_bytes = 1048576
+max_command_args = 1024
+max_mget_keys = 512
+max_connections = 1024
 
 [admin]
 listen = "127.0.0.1:9090"
@@ -26,19 +35,22 @@ max_entries = 100000
 max_local_ttl = "30s"
 allow_stale_on_upstream_error = false
 stale_grace = "0s"
+# Reserved for a later release; non-zero values are rejected.
 negative_ttl = "0s"
 
-# Optional rules use literal longest-prefix matching. An empty prefix is a
-# catch-all. cache rules require both limits; deny/observe rules omit them.
-# [[cache.policies]]
-# prefix = "session:"
-# mode = "deny"
-#
-# [[cache.policies]]
-# prefix = "catalog:"
-# mode = "cache"
-# max_item_bytes = 1048576
-# max_local_ttl = "10s"
+# Keep this catch-all when changing the global mode to "cache". Without it,
+# unmatched keys inherit the global mode and are eligible for caching.
+[[cache.policies]]
+prefix = ""
+mode = "observe"
+
+# This reviewed demo prefix remains observe-only while the global mode is
+# "observe". Changing the global mode to "cache" promotes only this prefix.
+[[cache.policies]]
+prefix = "product:"
+mode = "cache"
+max_item_bytes = 1048576
+max_local_ttl = "10s"
 
 [hotness]
 window = "1s"
@@ -53,7 +65,10 @@ max_tracked_keys = 100000
 
 [privacy]
 key_visibility = "hash"
-key_hash_secret = "change-me"
+# Omitted by default: Slizen generates a cryptographically random process-local
+# secret. Set key_hash_secret or SLIZEN_KEY_HASH_SECRET only when anonymized IDs
+# must remain comparable across restarts. The secret is never logged.
+# key_hash_secret = "load-a-stable-secret-from-your-secret-manager"
 
 [logging]
 level = "info"

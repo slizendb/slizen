@@ -42,6 +42,7 @@ spec:
           args:
             - --config
             - /etc/slizen/slizen.toml
+          {{- if or .Values.upstream.existingSecret.name .Values.privacy.existingSecret.name }}
           env:
             {{- with .Values.upstream.existingSecret.name }}
             - name: SLIZEN_UPSTREAM_USERNAME
@@ -57,16 +58,14 @@ spec:
                   key: {{ $.Values.upstream.existingSecret.passwordKey | quote }}
                   optional: true
             {{- end }}
+            {{- with .Values.privacy.existingSecret.name }}
             - name: SLIZEN_KEY_HASH_SECRET
               valueFrom:
-                {{- if .Values.privacy.existingSecret.name }}
                 secretKeyRef:
-                  name: {{ .Values.privacy.existingSecret.name | quote }}
-                  key: {{ .Values.privacy.existingSecret.key | quote }}
-                {{- else }}
-                fieldRef:
-                  fieldPath: metadata.uid
-                {{- end }}
+                  name: {{ . | quote }}
+                  key: {{ $.Values.privacy.existingSecret.key | quote }}
+            {{- end }}
+          {{- end }}
           ports:
             - name: redis
               containerPort: 6380

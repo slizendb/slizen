@@ -4,6 +4,9 @@
 {{- if le (float64 .Values.hotness.promotionThreshold) (float64 .Values.hotness.demotionThreshold) }}
 {{- fail "hotness.promotionThreshold must be greater than hotness.demotionThreshold" }}
 {{- end }}
+{{- if ge (int .Values.proxy.maxMGetKeys) (int .Values.proxy.maxCommandArgs) }}
+{{- fail "proxy.maxMGetKeys must be less than proxy.maxCommandArgs" }}
+{{- end }}
 {{- $globalMaxItemBytes := int64 .Values.cache.maxBytes }}
 {{- $globalMaxLocalTTL := include "slizen.durationNanoseconds" (list .Values.cache.maxLocalTTL "cache.maxLocalTTL") | int64 }}
 {{- $seenPolicyPrefixes := dict }}
@@ -47,6 +50,10 @@ data:
     read_timeout = {{ .Values.proxy.readTimeout | quote }}
     write_timeout = {{ .Values.proxy.writeTimeout | quote }}
     shutdown_timeout = {{ .Values.proxy.shutdownTimeout | quote }}
+    max_command_bytes = {{ int .Values.proxy.maxCommandBytes }}
+    max_command_args = {{ int .Values.proxy.maxCommandArgs }}
+    max_mget_keys = {{ int .Values.proxy.maxMGetKeys }}
+    max_connections = {{ int .Values.proxy.maxConnections }}
 
     [admin]
     listen = {{ .Values.admin.listen | quote }}

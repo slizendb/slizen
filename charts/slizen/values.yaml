@@ -32,6 +32,10 @@ proxy:
   readTimeout: 3s
   writeTimeout: 3s
   shutdownTimeout: 10s
+  maxCommandBytes: 1048576
+  maxCommandArgs: 1024
+  maxMGetKeys: 512
+  maxConnections: 1024
 
 admin:
   listen: 127.0.0.1:9090
@@ -45,12 +49,15 @@ cache:
   maxLocalTTL: 30s
   allowStaleOnUpstreamError: false
   staleGrace: 0s
+  # Reserved for a later release; the schema requires 0s.
   negativeTTL: 0s
   # Longest literal prefix wins. Cache rules require maxItemBytes and
   # maxLocalTTL; deny/observe rules omit both limits.
-  policies: []
-  # - prefix: "session:"
-  #   mode: deny
+  # The empty-prefix observe rule keeps unmatched keys out of the cache if the
+  # global mode is later changed to cache for selective promotion.
+  policies:
+    - prefix: ""
+      mode: observe
   # - prefix: "catalog:"
   #   mode: cache
   #   maxItemBytes: 1048576
@@ -67,8 +74,9 @@ hotness:
 
 privacy:
   keyVisibility: hash
-  # Optional stable HMAC key. Without it, the Pod UID is used and anonymized
-  # key IDs change after a Pod restart. The chart does not create this Secret.
+  # Optional stable HMAC key. Without it, Slizen generates a random
+  # process-local secret and key IDs change after restart. The chart does not
+  # create this Secret.
   existingSecret:
     name: ""
     key: key-hash-secret

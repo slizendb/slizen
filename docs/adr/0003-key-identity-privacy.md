@@ -17,7 +17,7 @@ Slizen supports:
 - `privacy.key_visibility = "hash"`: expose HMAC-SHA256-based key identifiers.
 - `privacy.key_visibility = "plain"`: expose raw keys for private local debugging.
 
-The HMAC secret is configured by `privacy.key_hash_secret` or `SLIZEN_KEY_HASH_SECRET`.
+The HMAC secret can be configured by `privacy.key_hash_secret` or `SLIZEN_KEY_HASH_SECRET`. When both are omitted, Slizen generates a cryptographically random process-local secret. It is never logged; anonymized identifiers intentionally change after restart.
 
 `/v1/status` exposes the visibility mode but never the secret.
 
@@ -25,6 +25,6 @@ Promotion and demotion logs always use HMAC identifiers, even when admin hot-key
 
 ## Consequences
 
-The default admin output is stable across requests but does not directly reveal raw key names.
+The default admin output is stable within one process lifetime but does not directly reveal raw key names.
 
-Operators must set a non-default secret before sharing telemetry outside a trusted local environment.
+Operators need a high-entropy stable secret from their secret manager only when identifiers must be compared across restarts. Telemetry must still be handled as potentially sensitive because HMAC identifiers can reveal repeated access patterns.

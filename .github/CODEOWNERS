@@ -1,0 +1,8 @@
+# Release, security, and repository policy changes require an explicit owner review.
+/.github/ @gazakov
+/Dockerfile @gazakov
+/LICENSE @gazakov
+/NOTICE @gazakov
+/SECURITY.md @gazakov
+/go.mod @gazakov
+/go.sum @gazakov

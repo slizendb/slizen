@@ -12,6 +12,8 @@ cache:
   maxEntries: 20000
   maxLocalTTL: 15s
   policies:
+    - prefix: ""
+      mode: observe
     - prefix: "session:"
       mode: deny
     - prefix: "catalog:"

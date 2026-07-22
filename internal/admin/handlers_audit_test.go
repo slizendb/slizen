@@ -104,6 +104,7 @@ func TestWriteJSONRejectsNonFiniteNumbersBeforeWriting(t *testing.T) {
 
 func TestCachePurgePreservesWhitespaceKeyAndNeverExpandsItToPurgeAll(t *testing.T) {
 	cfg := config.Default()
+	cfg.Mode = "cache"
 	cfg.Hotness.Window = time.Second
 	cfg.Hotness.EWMAAlpha = 1
 	cfg.Hotness.PromotionThreshold = 1

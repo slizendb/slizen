@@ -59,10 +59,12 @@ type Service struct {
 	version  string
 	commit   string
 
-	proxyActive atomic.Bool
-	closed      atomic.Bool
-	group       singleflight.Group
-	cacheEpochs [cacheEpochStripeCount]cacheEpochStripeState
+	proxyActive    atomic.Bool
+	closed         atomic.Bool
+	lifetimeCtx    context.Context
+	cancelLifetime context.CancelFunc
+	group          singleflight.Group
+	cacheEpochs    [cacheEpochStripeCount]cacheEpochStripeState
 }
 
 type Status struct {
@@ -145,19 +147,22 @@ func New(opts Options) *Service {
 	if commit == "" {
 		commit = "unknown"
 	}
+	lifetimeCtx, cancelLifetime := context.WithCancel(context.Background())
 
 	return &Service{
-		cfg:      opts.Config,
-		upstream: opts.Upstream,
-		cache:    cacheStore,
-		tracker:  tracker,
-		metrics:  recorder,
-		logger:   logger,
-		clock:    clock,
-		policies: newPolicyMatcher(opts.Config),
-		started:  clock.Now(),
-		version:  version,
-		commit:   commit,
+		cfg:            opts.Config,
+		upstream:       opts.Upstream,
+		cache:          cacheStore,
+		tracker:        tracker,
+		metrics:        recorder,
+		logger:         logger,
+		clock:          clock,
+		policies:       newPolicyMatcher(opts.Config),
+		started:        clock.Now(),
+		version:        version,
+		commit:         commit,
+		lifetimeCtx:    lifetimeCtx,
+		cancelLifetime: cancelLifetime,
 	}
 }
 
@@ -173,6 +178,7 @@ func (s *Service) Close() error {
 	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
+	s.cancelLifetime()
 	s.cache.Close()
 	if s.upstream != nil {
 		return s.upstream.Close()
@@ -183,6 +189,9 @@ func (s *Service) Close() error {
 func (s *Service) Get(ctx context.Context, key string) (upstream.Value, error) {
 	if key == "" {
 		return upstream.Value{}, errors.New("key is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return upstream.Value{}, err
 	}
 	policy := s.policies.Match(key)
 	if policy.Mode != cachepolicy.ModeDeny {
@@ -205,8 +214,12 @@ func (s *Service) Get(ctx context.Context, key string) (upstream.Value, error) {
 	}
 
 	epoch := s.cacheEpoch(key)
-	valueAny, err, shared := s.group.Do(key, func() (any, error) {
-		value, getErr := s.fetchUpstreamGet(ctx, key)
+	resultCh := s.group.DoChan(key, func() (any, error) {
+		// The shared upstream request has its own bounded timeout and must not
+		// be canceled by whichever caller happened to become the flight leader.
+		flightCtx, cancel := s.sharedGetContext()
+		defer cancel()
+		value, getErr := s.fetchUpstreamGet(flightCtx, key)
 		if getErr != nil {
 			return upstream.Value{}, getErr
 		}
@@ -217,19 +230,25 @@ func (s *Service) Get(ctx context.Context, key string) (upstream.Value, error) {
 		s.reconcileLocalIfCurrent(key, value, epoch, policy)
 		return value, nil
 	})
-	if shared {
+	var result singleflight.Result
+	select {
+	case <-ctx.Done():
+		return upstream.Value{}, ctx.Err()
+	case result = <-resultCh:
+	}
+	if result.Shared {
 		s.metrics.Coalesced()
 	}
-	if err != nil {
+	if result.Err != nil {
 		if s.cfg.Cache.AllowStaleOnUpstreamError {
 			if item, ok := s.cache.GetStale(key, s.cfg.Cache.StaleGrace); ok {
 				return upstream.Value{Exists: true, Data: item.Value, PTTL: item.TTL}, nil
 			}
 		}
-		return upstream.Value{}, err
+		return upstream.Value{}, result.Err
 	}
 	s.observeCache()
-	return valueAny.(upstream.Value), nil
+	return result.Val.(upstream.Value), nil
 }
 
 func (s *Service) fetchUpstreamGet(ctx context.Context, key string) (upstream.Value, error) {
@@ -607,4 +626,20 @@ func (s *Service) upstreamContext(parent context.Context) (context.Context, cont
 		timeout = 2 * time.Second
 	}
 	return context.WithTimeout(parent, timeout)
+}
+
+func (s *Service) sharedGetContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(s.lifetimeCtx, s.sharedReadTimeout())
+}
+
+func (s *Service) sharedReadTimeout() time.Duration {
+	upstreamTimeout := s.cfg.Upstream.ReadTimeout
+	if upstreamTimeout <= 0 {
+		upstreamTimeout = 2 * time.Second
+	}
+	proxyTimeout := s.cfg.Proxy.ReadTimeout
+	if proxyTimeout > 0 && proxyTimeout < upstreamTimeout {
+		return proxyTimeout
+	}
+	return upstreamTimeout
 }

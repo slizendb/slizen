@@ -1,4 +1,5 @@
 .git
+.github
 .gocache
 bin
 dist
@@ -7,3 +8,14 @@ coverage.out
 *.test
 *.prof
 .DS_Store
+
+# Local configuration and common secret-bearing files must never enter the
+# Docker build context. Keep the committed example available to the image.
+**/.env
+**/.env.*
+!**/.env.example
+/slizen.toml
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx

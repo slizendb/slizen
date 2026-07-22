@@ -112,3 +112,57 @@ func TestRejectedMutationsDoNotReachUpstream(t *testing.T) {
 		})
 	}
 }
+
+func TestCommandLimitsAreAppliedBeforeArgumentConversion(t *testing.T) {
+	cfg := config.Default().Proxy
+	cfg.MaxCommandBytes = 16
+	cfg.MaxCommandArgs = 4
+	cfg.MaxMGetKeys = 2
+
+	tests := []struct {
+		name string
+		cmd  redcon.Command
+		want string
+	}{
+		{name: "raw bytes", cmd: redcon.Command{Raw: make([]byte, 17), Args: [][]byte{[]byte("PING")}}, want: "proxy.max_command_bytes"},
+		{name: "argument payload bytes", cmd: redcon.Command{Args: [][]byte{[]byte("SET"), []byte("key"), []byte("01234567890")}}, want: "proxy.max_command_bytes"},
+		{name: "argument count", cmd: redcon.Command{Args: [][]byte{[]byte("DEL"), []byte("1"), []byte("2"), []byte("3"), []byte("4")}}, want: "proxy.max_command_args"},
+		{name: "mget fanout", cmd: redcon.Command{Args: [][]byte{[]byte("mget"), []byte("1"), []byte("2"), []byte("3")}}, want: "proxy.max_mget_keys"},
+		{name: "boundary", cmd: redcon.Command{Args: [][]byte{[]byte("MGET"), []byte("1"), []byte("2")}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := commandLimitError(tt.cmd, cfg)
+			if tt.want == "" && got != "" {
+				t.Fatalf("commandLimitError = %q, want no error", got)
+			}
+			if tt.want != "" && !strings.Contains(got, tt.want) {
+				t.Fatalf("commandLimitError = %q, want substring %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOversizedCommandIsRejectedAndConnectionClosed(t *testing.T) {
+	cfg := config.Default()
+	cfg.Proxy.MaxCommandBytes = 16
+	up := testutil.NewFakeUpstream()
+	svc := service.New(service.Options{Config: cfg, Upstream: up})
+	t.Cleanup(func() { _ = svc.Close() })
+	conn := &fakeConn{}
+
+	NewServer(cfg.Proxy, svc, nil).handle(conn, redcon.Command{
+		Raw:  make([]byte, 17),
+		Args: [][]byte{[]byte("SET"), []byte("key"), []byte("value")},
+	})
+
+	if !conn.closed {
+		t.Fatal("oversized command connection remained open")
+	}
+	if len(conn.writes) != 1 || !strings.Contains(conn.writes[0], "proxy.max_command_bytes") {
+		t.Fatalf("response = %#v, want command byte limit error", conn.writes)
+	}
+	if got := svc.Metrics().Snapshot().UpstreamRequests; got != 0 {
+		t.Fatalf("upstream requests = %d, want 0", got)
+	}
+}

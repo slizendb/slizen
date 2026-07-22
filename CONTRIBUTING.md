@@ -2,6 +2,8 @@
 
 Slizen is intentionally narrow. Before adding a feature, explain which measured failure mode or user workflow it solves.
 
+Use the repository's bug, feature, or design-partner issue form before starting a broad change. Suspected vulnerabilities belong in [private vulnerability reporting](https://github.com/slizendb/slizen/security/advisories/new), never a public issue.
+
 ## Local Checks
 
 ```sh
@@ -48,6 +50,7 @@ make vulncheck
 - Add tests for protocol, cache, and consistency semantics.
 - Document user-visible consistency changes.
 - Include benchmark evidence for hot-path changes.
+- Treat non-zero workload `value_mismatches` as invalid evidence, even when cache-hit or origin-reduction counters look favorable.
 
 ## Commit Style
 
