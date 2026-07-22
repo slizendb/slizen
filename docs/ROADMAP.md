@@ -66,6 +66,7 @@ Status: implemented and locally validated on 2026-07-22; unreleased.
 - [x] Remove miss-only timeout allocation and redundant tracker/cache-stat locking from verified local GET hits.
 - [x] Add a dedicated GET dispatch fast path and pre-bind fixed Prometheus metric children.
 - [x] Keep proxy drain socket deadline calls outside the global drain mutex without losing shutdown accounting.
+- [x] Remove redundant final-window boundary delay once a key's current count guarantees promotion without weakening EWMA or consecutive-window hysteresis.
 - [x] Correct the cache-hit microbenchmark, add a concurrent dispatch benchmark, and record a repeated before/after allocation baseline.
 - [x] Attribute workload read, write, and final-validation latency separately while preserving the backward-compatible aggregate distribution.
 - [x] Pass the complete Go, Docker, Kubernetes, and request-bound workload release gate from the intended clean commit before tagging.

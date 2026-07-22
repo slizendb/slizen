@@ -176,6 +176,53 @@ func TestGETMissThenPromotedHit(t *testing.T) {
 	}
 }
 
+func TestGETCachesOnGuaranteedPromotion(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	up := testutil.NewFakeUpstream()
+	up.Put("k", []byte("value"), 0)
+	svc := newTestServiceWithConfig(up, clock, func(cfg *config.Config) {
+		cfg.Hotness.PromotionThreshold = 2
+		cfg.Hotness.DemotionThreshold = 1
+		cfg.Hotness.MinimumHotWindows = 2
+	})
+
+	// The first two GETs form the required completed hot window. In the next
+	// window, the second GET makes promotion mathematically inevitable and its
+	// upstream response fills the cache immediately.
+	for range 2 {
+		if _, err := svc.Get(context.Background(), "k"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clock.Advance(time.Second)
+	for range 2 {
+		if _, err := svc.Get(context.Background(), "k"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls := up.GetCallCount("k"); calls != 4 {
+		t.Fatalf("upstream GETs through guaranteed promotion = %d, want 4", calls)
+	}
+	if _, ok := svc.cache.Inspect("k"); !ok {
+		t.Fatal("guaranteed promotion response was not cached")
+	}
+
+	value, err := svc.Get(context.Background(), "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !value.Exists || string(value.Data) != "value" {
+		t.Fatalf("cached GET = %+v, want value", value)
+	}
+	if calls := up.GetCallCount("k"); calls != 4 {
+		t.Fatalf("GET after guaranteed promotion reached upstream: %d calls", calls)
+	}
+	snapshot := svc.metrics.Snapshot()
+	if snapshot.Promotions != 1 || snapshot.CacheHits != 1 {
+		t.Fatalf("metrics after guaranteed promotion = %+v, want one promotion and one hit", snapshot)
+	}
+}
+
 func TestGETFreshHitSkipsSlowPathContextAndCacheObservation(t *testing.T) {
 	clock := testutil.NewFakeClock(time.Unix(0, 0))
 	up := testutil.NewFakeUpstream()
@@ -291,11 +338,27 @@ func TestObserveModeNeverUsesLocalCache(t *testing.T) {
 	up.Put("k", []byte("value"), 0)
 	svc := newTestServiceWithConfig(up, clock, func(cfg *config.Config) {
 		cfg.Mode = "observe"
+		cfg.Hotness.PromotionThreshold = 2
+		cfg.Hotness.DemotionThreshold = 1
+		cfg.Hotness.MinimumHotWindows = 2
 	})
 
-	promoteAndCache(t, svc, clock, "k")
+	for range 2 {
+		if _, err := svc.Get(context.Background(), "k"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clock.Advance(time.Second)
+	for range 2 {
+		if _, err := svc.Get(context.Background(), "k"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !svc.tracker.IsHot("k") {
+		t.Fatal("test setup did not exercise guaranteed promotion")
+	}
 	if stats := svc.cache.Stats(); stats.Entries != 0 {
-		t.Fatalf("observe mode should not store cache entries: %+v", stats)
+		t.Fatalf("observe mode should not store cache entries after guaranteed promotion: %+v", stats)
 	}
 
 	got, err := svc.Get(context.Background(), "k")
@@ -305,7 +368,7 @@ func TestObserveModeNeverUsesLocalCache(t *testing.T) {
 	if !got.Exists || string(got.Data) != "value" {
 		t.Fatalf("unexpected value: %+v", got)
 	}
-	if calls := up.GetCallCount("k"); calls != 3 {
+	if calls := up.GetCallCount("k"); calls != 5 {
 		t.Fatalf("observe mode should forward every GET, got %d upstream calls", calls)
 	}
 	status := svc.Status(context.Background())

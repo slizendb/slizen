@@ -80,6 +80,26 @@ The serial medians are 488.0 and 159.2 ns/op; the concurrent medians are 918.8 a
 
 Three JSON-backed local Docker hot-key repeats from the same working tree used 32 clients and 50,000 requests per phase on a fresh key each time. Their median direct Valkey p50/p95/p99 was 0.628/0.921/1.182 ms; the fully warm Slizen median was 0.632/0.970/1.277 ms with a 100% cache-hit ratio and zero upstream GETs in every repeat. The median warm-hit p99 tax was therefore 0.095 ms (about 8.0%) while median throughput remained within about 1%; this is evidence that the optimized warm path can approach direct latency while removing origin reads, not a universal latency promise. Three complete request-bound four-scenario gates also passed with exact sample-accounting invariants. Across those runs, mixed 99/1 read p99 was 1.36–1.54 ms through Slizen versus 1.02–1.15 ms direct, while origin GET reduction ranged from 71.4% to 79.2%. This wider adaptive-workload spread is why release evidence has no universal latency threshold and why future work should report repeated-run variance.
 
+### Adaptive-promotion follow-up
+
+The mixed 99/1 variance was traced to the global one-second scoring boundary. With the default two-window hysteresis, a key whose final required window was already guaranteed to qualify could still wait until the next boundary before entering `HOT`. The optimization commits only that inevitable final window: it uses the current count as a lower bound on the eventual full-window request rate, preserves the configured EWMA formula and threshold, and still requires the preceding completed qualifying windows.
+
+Five alternating baseline/candidate Docker pairs used fresh Slizen processes, unique key prefixes, 100,000 operations per phase, 1,000 keys, 128-byte values, a 95/5 read/write mix, concurrency 32, and seed 42. The baseline was commit `e35792a`; both images were otherwise built and exercised on the same Apple M5 host.
+
+| 99/1 metric | Baseline median (range) | Candidate median (range) | Median change |
+| --- | ---: | ---: | ---: |
+| Cache-hit ratio | 36.00% (35.91–45.15%) | 61.61% (60.78–69.48%) | +25.61 pp |
+| Origin GET reduction | 72.57% (72.45–77.51%) | 85.92% (85.65–89.89%) | +13.35 pp |
+| Slizen upstream GETs | 26,044 (21,360–26,160) | 13,371 (9,599–13,629) | -48.7% |
+| Cache share of prevented GETs | 49.61% (49.54–58.25%) | 71.71% (70.97–77.29%) | +22.09 pp |
+| Slizen read p99 | 1.364 ms (1.344–1.415) | 1.368 ms (1.282–1.462) | +0.004 ms |
+| Read p99 tax versus paired direct | 0.334 ms (0.291–0.378) | 0.315 ms (0.264–0.422) | -0.019 ms |
+| Slizen throughput | 34,717 ops/s (34,440–35,104) | 35,528 ops/s (33,564–35,742) | +2.3% |
+
+All ten benchmark invocations and their 20 measured phases reached the request limit with zero failures, value mismatches, or final-validation mismatches. A separate complete four-scenario release gate also passed. Its moving-flash phase produced a 6.2% cache-hit ratio and 90.2% origin GET reduction; most moving-flash savings still came from request coalescing, so that figure is not presented as a cache-only win.
+
+The added steady-state branch is measurable but bounded: 15 local `BenchmarkHotnessObservation` samples moved from a 24.35 ns/op median to 25.11 ns/op (+3.1%, or 0.76 ns/op), with zero allocations before and after. This is inside the 5% guard chosen before the experiment and is outweighed by the measured reduction in adaptation delay for the target workload.
+
 ## v0.2 Workload Harness
 
 `slizenctl benchmark workload` now includes:
