@@ -18,23 +18,24 @@ Slizen v0.2.2 keeps the v0.2 single-node developer-preview scope while reducing 
 - Workload JSON consumers should accept the additive `operation_attempts`, `termination_reason`, and per-operation latency objects. The top-level `p50_ms`, `p95_ms`, and `p99_ms` fields remain mixed aggregate distributions; use the new objects when distinguishing command time from harness ordering wait and final validation.
 - Local cache and hotness state remain disposable. Restarting Slizen still starts those states cold and does not require data migration.
 
+## Published artifacts
+
+- The annotated `v0.2.2` tag resolves to commit `74a12767deb72db9bc78bebd807cbe8717fa572c`.
+- The immutable multi-architecture image index is `ghcr.io/slizendb/slizen@sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627`, with `linux/amd64` and `linux/arm64` manifests. The `v0.2.2`, `0.2.2`, `0.2`, and `latest` aliases were independently verified against that index digest.
+- The exact-commit [public CI](https://github.com/slizendb/slizen/actions/runs/29952948422), [100,000-key extended validation](https://github.com/slizendb/slizen/actions/runs/29953153624), and [release image workflow](https://github.com/slizendb/slizen/actions/runs/29953669287) completed successfully.
+- GitHub-native provenance verifies for the immutable digest. The checksummed image evidence bundle and both extended-validation artifacts are attached to the [GitHub Release](https://github.com/slizendb/slizen/releases/tag/v0.2.2).
+
 ## Install and attest
 
-After the v0.2.2 tag and image have been published:
-
 ```sh
-docker pull ghcr.io/slizendb/slizen:0.2.2
-docker image inspect ghcr.io/slizendb/slizen:0.2.2 \
+docker pull ghcr.io/slizendb/slizen@sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627
+docker image inspect ghcr.io/slizendb/slizen@sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627 \
   --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
-docker image inspect ghcr.io/slizendb/slizen:0.2.2 \
-  --format '{{index .RepoDigests 0}}'
-gh attestation verify oci://ghcr.io/slizendb/slizen:0.2.2 \
+gh attestation verify oci://ghcr.io/slizendb/slizen@sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627 \
   --repo slizendb/slizen
 ```
 
-Compare the revision label with the released commit, then use the exact digest from the published `release-evidence-manifest.json` for an immutable deployment. The rolling `0.2` alias is convenient for discovery but is not an immutable release identity.
-
-This document does not assert a final v0.2.2 commit, image digest, release-workflow run, or image-bound benchmark result before those artifacts exist. Publication is complete only after the tagged source gate passes, provenance verifies, and checksummed evidence generated from the exact published digest is attached to the release.
+The revision label must equal the released commit above. The rolling `0.2` alias is convenient for discovery but is not an immutable release identity.
 
 ## Evidence contract
 
@@ -42,7 +43,17 @@ The v0.2.2 release gate runs the exact `uniform`, `skew-80-20`, `skew-99-1`, and
 
 Every scenario must have isolated, monotonic status evidence, zero request failures, zero value mismatches, and zero final-validation failures or mismatches. The combined read and write latency sample count must equal generated operation attempts, ordering-wait samples must match their command class, and final-validation samples must match validation reads. The stable 99/1 scenario must additionally record real cache hits and positive measured origin GET reduction. There is deliberately no shared-runner latency or capacity threshold.
 
-## Pre-release local evidence
+## Image-bound release evidence
+
+The published-image run used the exact digest above with Valkey 8.1.9 on a GitHub-hosted Linux/amd64 runner. Every direct-origin and Slizen phase reached exactly 100,000 generated operation attempts with `termination_reason: "request_limit"`. All four scenarios recorded zero request failures, value mismatches, final-validation failures, and final-validation mismatches; the complete sample-accounting contract passed.
+
+- In the stable 99/1 scenario, upstream GETs fell from `94,961` direct to `9,707` through Slizen, an `89.778%` reduction, with a `73.628%` cache-hit ratio. Attributed read p99 was `2.137 ms` through Slizen versus `1.460 ms` direct, so this is an origin-load result rather than a claim that the proxy was faster.
+- In the moving-flash scenario, upstream GETs fell from `94,956` to `8,735`, a `90.801%` reduction, while the cache-hit ratio was `13.451%`. Request coalescing contributes substantially to that gap, so it must not be presented as cache-hit reduction alone. Attributed read p99 was `1.166 ms` through Slizen versus `0.801 ms` direct.
+- In the separate single-hot-key image test, the fully warm phase served 20,000 requests with 100% cache hits and zero upstream GETs. Its p99 was `1.241 ms` through Slizen versus `1.191 ms` direct; this narrow synthetic best case is not a production-capacity result.
+
+See the [image-bound workload JSON](https://github.com/slizendb/slizen/releases/download/v0.2.2/slizen-workload-result.json), [image benchmark JSON](https://github.com/slizendb/slizen/releases/download/v0.2.2/slizen-benchmark-result.json), and checksummed manifest attached to the release. The separate [100,000-key workload](https://github.com/slizendb/slizen/releases/download/v0.2.2/extended-workload-result.json) and [five-run high-cardinality benchmarks](https://github.com/slizendb/slizen/releases/download/v0.2.2/high-cardinality-benchmarks.txt) also passed without failures or mismatches. That workload used a duration safety cap and is not a fixed-request throughput comparison or published-image run.
+
+## Pre-release local optimization evidence
 
 These results were recorded on an Apple M5 with Go 1.26.5 and describe the tested revisions, host, configuration, and synthetic workloads only. They are not tagged-image evidence or a production capacity claim.
 
@@ -61,4 +72,4 @@ The in-process benchmarks exclude RESP parsing, TCP, socket I/O, operating-syste
 - Redis compatibility is intentionally limited, negative caching is not implemented, and the admin API has no built-in authentication and must remain private.
 - redcon assembles a complete RESP command before Slizen applies byte and argument limits. Those settings bound dispatch and upstream work, not parser allocation, and upstream response sizes are not bounded by them.
 - `observe` mode continues to forward reads and collect telemetry without serving or storing local cached values.
-- Long-running soak, 100,000-key churn, and workload-specific capacity validation remain required before serious deployment.
+- The attached 100,000-key run is a bounded synthetic check, not a long-running soak or workload-specific capacity validation. Both remain required before serious deployment.
