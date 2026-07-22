@@ -3,7 +3,7 @@ module github.com/slizendb/slizen
 go 1.26.5
 
 require (
-	github.com/pelletier/go-toml/v2 v2.2.3
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/prometheus/client_golang v1.20.5
 	github.com/redis/go-redis/v9 v9.7.3
 	github.com/tidwall/redcon v1.6.2
