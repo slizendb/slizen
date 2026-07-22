@@ -90,6 +90,9 @@ type benchmarkPhase struct {
 	UpstreamGETs             uint64               `json:"upstream_gets"`
 	CacheHits                uint64               `json:"cache_hits"`
 	CacheMisses              uint64               `json:"cache_misses"`
+	CacheMissesPolicyBypass  uint64               `json:"cache_misses_policy_bypass"`
+	CacheMissesNotAdmitted   uint64               `json:"cache_misses_not_admitted"`
+	CacheMissesNotPresent    uint64               `json:"cache_misses_not_present"`
 	CacheHitRatio            float64              `json:"cache_hit_ratio_percent"`
 	Notes                    []string             `json:"notes,omitempty"`
 }
@@ -235,23 +238,26 @@ func (v workloadValues) versionDigest(keyIndex int, version uint64) [sha256.Size
 }
 
 type statusSnapshot struct {
-	Version                string `json:"version"`
-	Commit                 string `json:"commit,omitempty"`
-	Mode                   string `json:"mode"`
-	KeyVisibility          string `json:"key_visibility"`
-	Uptime                 string `json:"uptime"`
-	RequestsTotal          uint64 `json:"requests_total"`
-	CacheHitsTotal         uint64 `json:"cache_hits_total"`
-	CacheMissesTotal       uint64 `json:"cache_misses_total"`
-	UpstreamRequestsTotal  uint64 `json:"upstream_requests_total"`
-	UpstreamGETsTotal      uint64 `json:"upstream_gets_total"`
-	CoalescedRequestsTotal uint64 `json:"coalesced_requests_total"`
-	InvalidationsTotal     uint64 `json:"invalidations_total"`
-	PromotionsTotal        uint64 `json:"promotions_total"`
-	DemotionsTotal         uint64 `json:"demotions_total"`
-	CacheEntries           int    `json:"cache_entries"`
-	CacheBytes             int64  `json:"cache_bytes"`
-	HotKeys                int    `json:"hot_keys"`
+	Version                 string `json:"version"`
+	Commit                  string `json:"commit,omitempty"`
+	Mode                    string `json:"mode"`
+	KeyVisibility           string `json:"key_visibility"`
+	Uptime                  string `json:"uptime"`
+	RequestsTotal           uint64 `json:"requests_total"`
+	CacheHitsTotal          uint64 `json:"cache_hits_total"`
+	CacheMissesTotal        uint64 `json:"cache_misses_total"`
+	CacheMissesPolicyBypass uint64 `json:"cache_misses_policy_bypass"`
+	CacheMissesNotAdmitted  uint64 `json:"cache_misses_not_admitted"`
+	CacheMissesNotPresent   uint64 `json:"cache_misses_not_present"`
+	UpstreamRequestsTotal   uint64 `json:"upstream_requests_total"`
+	UpstreamGETsTotal       uint64 `json:"upstream_gets_total"`
+	CoalescedRequestsTotal  uint64 `json:"coalesced_requests_total"`
+	InvalidationsTotal      uint64 `json:"invalidations_total"`
+	PromotionsTotal         uint64 `json:"promotions_total"`
+	DemotionsTotal          uint64 `json:"demotions_total"`
+	CacheEntries            int    `json:"cache_entries"`
+	CacheBytes              int64  `json:"cache_bytes"`
+	HotKeys                 int    `json:"hot_keys"`
 }
 
 func benchmarkCmd(args []string, stdout, stderr io.Writer) error {
@@ -1333,6 +1339,9 @@ func applyStatusDelta(phase *benchmarkPhase, before, after statusSnapshot) {
 	phase.UpstreamGETs = subtractUint64(after.UpstreamGETsTotal, before.UpstreamGETsTotal)
 	phase.CacheHits = subtractUint64(after.CacheHitsTotal, before.CacheHitsTotal)
 	phase.CacheMisses = subtractUint64(after.CacheMissesTotal, before.CacheMissesTotal)
+	phase.CacheMissesPolicyBypass = subtractUint64(after.CacheMissesPolicyBypass, before.CacheMissesPolicyBypass)
+	phase.CacheMissesNotAdmitted = subtractUint64(after.CacheMissesNotAdmitted, before.CacheMissesNotAdmitted)
+	phase.CacheMissesNotPresent = subtractUint64(after.CacheMissesNotPresent, before.CacheMissesNotPresent)
 	denominator := phase.CacheHits + phase.CacheMisses
 	if denominator > 0 {
 		phase.CacheHitRatio = 100 * float64(phase.CacheHits) / float64(denominator)
@@ -1344,6 +1353,9 @@ func applyWorkloadStatusDelta(phase *benchmarkPhase, before, after statusSnapsho
 		phase.UpstreamGETs = 0
 		phase.CacheHits = 0
 		phase.CacheMisses = 0
+		phase.CacheMissesPolicyBypass = 0
+		phase.CacheMissesNotAdmitted = 0
+		phase.CacheMissesNotPresent = 0
 		phase.CacheHitRatio = 0
 		phase.Notes = append(phase.Notes, reason)
 		return false
@@ -1395,6 +1407,9 @@ func invalidStatusDeltaReason(before, after statusSnapshot) string {
 	if after.RequestsTotal < before.RequestsTotal ||
 		after.CacheHitsTotal < before.CacheHitsTotal ||
 		after.CacheMissesTotal < before.CacheMissesTotal ||
+		after.CacheMissesPolicyBypass < before.CacheMissesPolicyBypass ||
+		after.CacheMissesNotAdmitted < before.CacheMissesNotAdmitted ||
+		after.CacheMissesNotPresent < before.CacheMissesNotPresent ||
 		after.UpstreamRequestsTotal < before.UpstreamRequestsTotal ||
 		after.UpstreamGETsTotal < before.UpstreamGETsTotal ||
 		after.CoalescedRequestsTotal < before.CoalescedRequestsTotal ||

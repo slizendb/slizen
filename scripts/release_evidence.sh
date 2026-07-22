@@ -119,6 +119,15 @@ jq -e \
     and .slizen.validation_failures == 0
     and .origin.validation_mismatches == 0
     and .slizen.validation_mismatches == 0
+    and (.slizen.cache_misses | type == "number")
+    and (.slizen.cache_misses_policy_bypass | type == "number")
+    and (.slizen.cache_misses_not_admitted | type == "number")
+    and (.slizen.cache_misses_not_present | type == "number")
+    and .slizen.cache_misses == (
+      .slizen.cache_misses_policy_bypass
+      + .slizen.cache_misses_not_admitted
+      + .slizen.cache_misses_not_present
+    )
   )
   and any(.scenarios[];
     .name == "skew-99-1"

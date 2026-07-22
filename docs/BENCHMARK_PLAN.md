@@ -151,6 +151,25 @@ All ten pairs favored the candidate. Median time was 538.6 versus 383.75 ns/op, 
 
 These benchmarks exclude TCP, RESP parsing, socket I/O, and upstream requests. `GOMAXPROCS=32` oversubscribes this Apple M5 and is a contention stress case. The results do not establish an end-to-end p99 or production-capacity improvement.
 
+## v0.2.3 Two-hit Admission Candidate: 2026-07-23
+
+The v0.2.2 release evidence showed that the remaining origin reads in the cold 99/1 workload were dominated by admission delay and repeated invalidation after writes, not by the eventual warm-hit path. The candidate makes two bounded changes: one later read can promote a fresh probationary value while preserving its original expiry, and a successful exact option-free `SET` can refresh a value only when its key is already admitted under a cache policy. It does not admit cold writes or weaken conservative handling for other mutations and ambiguous errors.
+
+The cache budget is partitioned rather than enlarged: seven eighths remain protected and one eighth is reserved for probationary candidates. Candidate TTL is bounded by the ordinary local caps and the hotness window. Fixed `policy_bypass`, `not_admitted`, and `not_present` miss counters make the remaining request-path misses attributable without key-derived labels.
+
+Five local Docker repeats used the unchanged cold request-bound command below in shape: `skew-99-1`, seed 42, 1,000 keys, 100,000 generated operations per phase, a 95/5 read/write mix, 128-byte values, and concurrency 32. Each run used a fresh isolated key prefix and zeroed both local tiers before the proxy phase.
+
+| Metric | Five-repeat range |
+| --- | ---: |
+| Direct origin GETs | 94,961 every run |
+| Slizen origin GETs | 798–803 |
+| Origin GET reduction | 99.154390%–99.159655% |
+| Cache-hit ratio | 99.121745%–99.151231% |
+| Slizen read p99 | 1.175–1.251 ms |
+| Direct read p99 | 0.986–1.042 ms |
+
+All ten measured phases reached exactly 100,000 generated operations with zero request failures, value mismatches, final-validation failures, and final-validation mismatches. This result crosses 99% origin GET reduction for this exact local workload, but it is neither a pass threshold for the full release suite nor a guarantee for uniform, moving, write-heavy, or real production traffic. Direct p99 remained lower in these repeats, so the claim is reduced origin pressure rather than Redis acceleration. These are source-tree release-candidate measurements; immutable image-bound v0.2.3 evidence does not exist until publication.
+
 ## v0.2 Workload Harness
 
 `slizenctl benchmark workload` now includes:
@@ -163,5 +182,6 @@ These benchmarks exclude TCP, RESP parsing, socket I/O, and upstream requests. `
 - [x] configurable value size, concurrency, duration, operation cap, and deterministic seed;
 - [x] JSON output with backward-compatible aggregate p50/p95/p99 latency plus separate read, write, and final-validation sample counts and distributions;
 - [x] explicit request-limit versus duration-limit termination attribution, origin GET reduction, cache hit ratio, and runtime versions.
+- [x] fixed request-path cache miss attribution for policy bypass, non-admission, and absent protected values.
 
 The harness produces reproducible local evidence, not a production capacity claim. Future benchmark work should prioritize anonymized real-workload traces and repeated-run variance rather than adding synthetic scenarios without user evidence.

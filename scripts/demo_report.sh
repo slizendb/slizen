@@ -177,6 +177,7 @@ Key visibility: `{visibility}`
 - truncated: {str(audit.get("truncated", False)).lower()}
 - telemetry complete: {str(audit.get("telemetry_complete", False)).lower()}
 - tracking evictions: {audit.get("tracking_evictions", 0)}
+- capacity observations dropped: {audit.get("capacity_observations_dropped", 0)}
 - oversized observations dropped: {audit.get("oversized_observations_dropped", 0)}
 
 ## Limitations

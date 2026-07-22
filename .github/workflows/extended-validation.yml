@@ -91,6 +91,13 @@ jobs:
               and .slizen.validation_failures == 0
               and .origin.validation_mismatches == 0
               and .slizen.validation_mismatches == 0
+              and (.slizen.cache_misses | type == "number")
+              and (.slizen.cache_misses_policy_bypass | type == "number")
+              and (.slizen.cache_misses_not_admitted | type == "number")
+              and (.slizen.cache_misses_not_present | type == "number")
+              and (.slizen.cache_misses_policy_bypass
+                + .slizen.cache_misses_not_admitted
+                + .slizen.cache_misses_not_present == .slizen.cache_misses)
             )
           ' tmp/extended-workload-result.json >/dev/null
       - name: Stop stack after an earlier failure

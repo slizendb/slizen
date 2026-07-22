@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,8 +33,9 @@ const cacheEpochStripeCount = 256
 // cacheEpochStripeState makes an epoch check plus its local-cache mutation
 // indivisible with respect to write-driven generation changes and invalidation.
 type cacheEpochStripeState struct {
-	mu    sync.Mutex
-	epoch atomic.Uint64
+	mu                  sync.Mutex
+	epoch               atomic.Uint64
+	promotionInProgress atomic.Bool
 }
 
 type Options struct {
@@ -50,14 +52,17 @@ type Service struct {
 	cfg      config.Config
 	upstream upstream.Client
 	cache    *cache.Cache
-	tracker  *hotness.Tracker
-	metrics  *metrics.Recorder
-	logger   *slog.Logger
-	clock    Clock
-	policies *cachepolicy.Matcher
-	started  time.Time
-	version  string
-	commit   string
+	// probationary is a bounded scan-resistant admission tier. Values become
+	// eligible for the protected cache only after a later read finds them here.
+	probationary *cache.Cache
+	tracker      *hotness.Tracker
+	metrics      *metrics.Recorder
+	logger       *slog.Logger
+	clock        Clock
+	policies     *cachepolicy.Matcher
+	started      time.Time
+	version      string
+	commit       string
 
 	proxyActive    atomic.Bool
 	closed         atomic.Bool
@@ -65,35 +70,39 @@ type Service struct {
 	cancelLifetime context.CancelFunc
 	group          singleflight.Group
 	cacheEpochs    [cacheEpochStripeCount]cacheEpochStripeState
+	mutationGates  [cacheEpochStripeCount]chan struct{}
 }
 
 type Status struct {
-	Version                string `json:"version"`
-	Commit                 string `json:"commit,omitempty"`
-	Mode                   string `json:"mode"`
-	KeyVisibility          string `json:"key_visibility"`
-	Uptime                 string `json:"uptime"`
-	UpstreamStatus         string `json:"upstream_status"`
-	CacheBytes             int64  `json:"cache_bytes"`
-	CacheEntries           int    `json:"cache_entries"`
-	TrackedKeys            int    `json:"tracked_keys"`
-	HotKeys                int    `json:"hot_keys"`
-	TotalRequests          uint64 `json:"total_requests"`
-	CacheHits              uint64 `json:"cache_hits"`
-	CacheMisses            uint64 `json:"cache_misses"`
-	UpstreamRequests       uint64 `json:"upstream_requests"`
-	RequestsTotal          uint64 `json:"requests_total"`
-	CacheHitsTotal         uint64 `json:"cache_hits_total"`
-	CacheMissesTotal       uint64 `json:"cache_misses_total"`
-	UpstreamRequestsTotal  uint64 `json:"upstream_requests_total"`
-	UpstreamGetsTotal      uint64 `json:"upstream_gets_total"`
-	InvalidationsTotal     uint64 `json:"invalidations_total"`
-	PromotionsTotal        uint64 `json:"promotions_total"`
-	DemotionsTotal         uint64 `json:"demotions_total"`
-	CoalescedRequestsTotal uint64 `json:"coalesced_requests_total"`
-	Promotions             uint64 `json:"promotions"`
-	Demotions              uint64 `json:"demotions"`
-	CoalescedRequests      uint64 `json:"coalesced_requests"`
+	Version                 string `json:"version"`
+	Commit                  string `json:"commit,omitempty"`
+	Mode                    string `json:"mode"`
+	KeyVisibility           string `json:"key_visibility"`
+	Uptime                  string `json:"uptime"`
+	UpstreamStatus          string `json:"upstream_status"`
+	CacheBytes              int64  `json:"cache_bytes"`
+	CacheEntries            int    `json:"cache_entries"`
+	TrackedKeys             int    `json:"tracked_keys"`
+	HotKeys                 int    `json:"hot_keys"`
+	TotalRequests           uint64 `json:"total_requests"`
+	CacheHits               uint64 `json:"cache_hits"`
+	CacheMisses             uint64 `json:"cache_misses"`
+	CacheMissesPolicyBypass uint64 `json:"cache_misses_policy_bypass"`
+	CacheMissesNotAdmitted  uint64 `json:"cache_misses_not_admitted"`
+	CacheMissesNotPresent   uint64 `json:"cache_misses_not_present"`
+	UpstreamRequests        uint64 `json:"upstream_requests"`
+	RequestsTotal           uint64 `json:"requests_total"`
+	CacheHitsTotal          uint64 `json:"cache_hits_total"`
+	CacheMissesTotal        uint64 `json:"cache_misses_total"`
+	UpstreamRequestsTotal   uint64 `json:"upstream_requests_total"`
+	UpstreamGetsTotal       uint64 `json:"upstream_gets_total"`
+	InvalidationsTotal      uint64 `json:"invalidations_total"`
+	PromotionsTotal         uint64 `json:"promotions_total"`
+	DemotionsTotal          uint64 `json:"demotions_total"`
+	CoalescedRequestsTotal  uint64 `json:"coalesced_requests_total"`
+	Promotions              uint64 `json:"promotions"`
+	Demotions               uint64 `json:"demotions"`
+	CoalescedRequests       uint64 `json:"coalesced_requests"`
 }
 
 type HotKey struct {
@@ -127,7 +136,12 @@ func New(opts Options) *Service {
 		logger = slog.Default()
 	}
 
-	cacheStore := cache.New(opts.Config.Cache.MaxBytes, opts.Config.Cache.MaxEntries, clock)
+	tierLimits := splitCacheTierLimits(opts.Config.Cache.MaxBytes, opts.Config.Cache.MaxEntries)
+	cacheStore := cache.New(tierLimits.protectedBytes, tierLimits.protectedEntries, clock)
+	var probationaryStore *cache.Cache
+	if tierLimits.probationaryEnabled {
+		probationaryStore = cache.New(tierLimits.probationaryBytes, tierLimits.probationaryEntries, clock)
+	}
 	tracker := hotness.New(hotness.Config{
 		Window:             opts.Config.Hotness.Window,
 		EWMAAlpha:          opts.Config.Hotness.EWMAAlpha,
@@ -149,10 +163,11 @@ func New(opts Options) *Service {
 	}
 	lifetimeCtx, cancelLifetime := context.WithCancel(context.Background())
 
-	return &Service{
+	service := &Service{
 		cfg:            opts.Config,
 		upstream:       opts.Upstream,
 		cache:          cacheStore,
+		probationary:   probationaryStore,
 		tracker:        tracker,
 		metrics:        recorder,
 		logger:         logger,
@@ -164,6 +179,10 @@ func New(opts Options) *Service {
 		lifetimeCtx:    lifetimeCtx,
 		cancelLifetime: cancelLifetime,
 	}
+	for i := range service.mutationGates {
+		service.mutationGates[i] = make(chan struct{}, 1)
+	}
+	return service
 }
 
 func (s *Service) Metrics() *metrics.Recorder {
@@ -180,6 +199,9 @@ func (s *Service) Close() error {
 	}
 	s.cancelLifetime()
 	s.cache.Close()
+	if s.probationary != nil {
+		s.probationary.Close()
+	}
 	if s.upstream != nil {
 		return s.upstream.Close()
 	}
@@ -207,7 +229,7 @@ func (s *Service) Get(ctx context.Context, key string) (upstream.Value, error) {
 			return upstream.Value{Exists: true, Data: item.Value, PTTL: item.TTL}, nil
 		}
 	}
-	s.metrics.CacheMiss("GET")
+	s.metrics.CacheMissWithReason("GET", cacheMissReason(policy, observedState))
 	readCtx, cancel := context.WithTimeout(ctx, s.sharedReadTimeout())
 	defer cancel()
 
@@ -292,7 +314,7 @@ func (s *Service) MGet(ctx context.Context, keys []string) ([]upstream.Value, er
 				continue
 			}
 		}
-		s.metrics.CacheMiss("MGET")
+		s.metrics.CacheMissWithReason("MGET", cacheMissReason(policy, observedState))
 		missingKeys = append(missingKeys, key)
 		read := missingRead{position: i, policy: policy}
 		if policy.Mode == cachepolicy.ModeCache {
@@ -342,11 +364,20 @@ func (s *Service) MGet(ctx context.Context, keys []string) ([]upstream.Value, er
 }
 
 func (s *Service) ExecuteWrite(ctx context.Context, command string, args []string, keys []string) (any, error) {
-	s.advanceCacheEpochs(keys)
-	start := s.clock.Now()
-	result, err := s.upstream.Do(ctx, append([]string{command}, args...)...)
-	s.metrics.ObserveUpstream(command, s.clock.Now().Sub(start), err)
+	stripes, err := s.acquireMutationStripes(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer s.releaseMutationStripes(stripes)
+
+	// Remove both tiers before dispatch so a slow write never leaves a stale
+	// local-hit window. The final epoch barrier below also rejects reads that
+	// began while the mutation was in flight.
 	invalidated := s.invalidateCacheKeys(keys)
+	start := s.clock.Now()
+	result, writeErr := s.upstream.Do(ctx, append([]string{command}, args...)...)
+	s.metrics.ObserveUpstream(command, s.clock.Now().Sub(start), writeErr)
+	invalidated += s.finalizeWrite(command, args, keys, result, writeErr)
 	for _, key := range keys {
 		s.group.Forget(key)
 	}
@@ -354,8 +385,8 @@ func (s *Service) ExecuteWrite(ctx context.Context, command string, args []strin
 		s.metrics.Invalidation("write")
 	}
 	s.observeCache()
-	if err != nil {
-		return nil, err
+	if writeErr != nil {
+		return nil, writeErr
 	}
 	return result, nil
 }
@@ -379,7 +410,7 @@ func (s *Service) Ready(ctx context.Context) error {
 
 func (s *Service) Status(ctx context.Context) Status {
 	s.handleTransitions(s.tracker.Advance())
-	cacheStats := s.cache.Stats()
+	cacheStats := combinedCacheStats(s.cache.Stats(), s.probationary)
 	s.metrics.ObserveCache(cacheStats.Entries, cacheStats.Bytes, cacheStats.Evictions)
 	tracked, hot := s.tracker.Stats()
 	s.metrics.SetHotKeys(hot)
@@ -391,32 +422,35 @@ func (s *Service) Status(ctx context.Context) Status {
 	}
 
 	return Status{
-		Version:                s.version,
-		Commit:                 s.commit,
-		Mode:                   s.cfg.Mode,
-		KeyVisibility:          config.EffectiveKeyVisibility(s.cfg),
-		Uptime:                 s.clock.Now().Sub(s.started).Round(time.Second).String(),
-		UpstreamStatus:         upstreamStatus,
-		CacheBytes:             cacheStats.Bytes,
-		CacheEntries:           cacheStats.Entries,
-		TrackedKeys:            tracked,
-		HotKeys:                hot,
-		TotalRequests:          snap.TotalRequests,
-		CacheHits:              snap.CacheHits,
-		CacheMisses:            snap.CacheMisses,
-		UpstreamRequests:       snap.UpstreamRequests,
-		RequestsTotal:          snap.TotalRequests,
-		CacheHitsTotal:         snap.CacheHits,
-		CacheMissesTotal:       snap.CacheMisses,
-		UpstreamRequestsTotal:  snap.UpstreamRequests,
-		UpstreamGetsTotal:      snap.UpstreamGets,
-		InvalidationsTotal:     snap.Invalidations,
-		PromotionsTotal:        snap.Promotions,
-		DemotionsTotal:         snap.Demotions,
-		CoalescedRequestsTotal: snap.CoalescedRequests,
-		Promotions:             snap.Promotions,
-		Demotions:              snap.Demotions,
-		CoalescedRequests:      snap.CoalescedRequests,
+		Version:                 s.version,
+		Commit:                  s.commit,
+		Mode:                    s.cfg.Mode,
+		KeyVisibility:           config.EffectiveKeyVisibility(s.cfg),
+		Uptime:                  s.clock.Now().Sub(s.started).Round(time.Second).String(),
+		UpstreamStatus:          upstreamStatus,
+		CacheBytes:              cacheStats.Bytes,
+		CacheEntries:            cacheStats.Entries,
+		TrackedKeys:             tracked,
+		HotKeys:                 hot,
+		TotalRequests:           snap.TotalRequests,
+		CacheHits:               snap.CacheHits,
+		CacheMisses:             snap.CacheMisses,
+		CacheMissesPolicyBypass: snap.CacheMissesPolicyBypass,
+		CacheMissesNotAdmitted:  snap.CacheMissesNotAdmitted,
+		CacheMissesNotPresent:   snap.CacheMissesNotPresent,
+		UpstreamRequests:        snap.UpstreamRequests,
+		RequestsTotal:           snap.TotalRequests,
+		CacheHitsTotal:          snap.CacheHits,
+		CacheMissesTotal:        snap.CacheMisses,
+		UpstreamRequestsTotal:   snap.UpstreamRequests,
+		UpstreamGetsTotal:       snap.UpstreamGets,
+		InvalidationsTotal:      snap.Invalidations,
+		PromotionsTotal:         snap.Promotions,
+		DemotionsTotal:          snap.Demotions,
+		CoalescedRequestsTotal:  snap.CoalescedRequests,
+		Promotions:              snap.Promotions,
+		Demotions:               snap.Demotions,
+		CoalescedRequests:       snap.CoalescedRequests,
 	}
 }
 
@@ -444,7 +478,7 @@ func (s *Service) HotKeys(limit int) []HotKey {
 }
 
 func (s *Service) CacheInfo() CacheInfo {
-	stats := s.cache.Stats()
+	stats := combinedCacheStats(s.cache.Stats(), s.probationary)
 	s.metrics.ObserveCache(stats.Entries, stats.Bytes, stats.Evictions)
 	return CacheInfo{
 		Entries:   stats.Entries,
@@ -460,7 +494,6 @@ func (s *Service) PurgeCache(key string) bool {
 		s.observeCache()
 		return true
 	}
-	s.advanceCacheEpochs([]string{key})
 	ok := s.invalidateCacheKeys([]string{key}) > 0
 	s.group.Forget(key)
 	if ok {
@@ -471,41 +504,219 @@ func (s *Service) PurgeCache(key string) bool {
 }
 
 func (s *Service) getFreshCachedInState(key string, state hotness.State) (cache.EntrySnapshot, bool) {
-	if state != hotness.StateHot {
-		s.cache.Delete(key)
+	if state == hotness.StateHot {
+		if item, ok := s.getFreshProtected(key); ok {
+			return item, true
+		}
+	}
+	if s.probationary == nil {
 		return cache.EntrySnapshot{}, false
 	}
+	// Avoid taking a generation stripe on the ordinary empty-cache path. A
+	// candidate is re-read under the stripe below before it can be promoted.
+	if _, ok := s.probationary.Get(key); !ok {
+		// Another reader may have promoted the candidate after this command
+		// captured a stale non-HOT state. Promotion deletes probation before it
+		// installs the protected value. Wait only for that short transfer window;
+		// unrelated invalidation or full-purge work on the same stripe must not
+		// stall an ordinary miss.
+		if !s.tracker.IsHot(key) {
+			return cache.EntrySnapshot{}, false
+		}
+		stripe := &s.cacheEpochs[cacheEpochStripe(key)]
+		if stripe.promotionInProgress.Load() {
+			stripe.mu.Lock()
+			item, ok := s.getFreshProtected(key)
+			stripe.mu.Unlock()
+			return item, ok
+		}
+		return s.getFreshProtected(key)
+	}
+
+	// A protected miss takes the key stripe before rechecking current tracker
+	// state and probation. This makes exactly one later command promote a
+	// candidate and prevents a stale observation from deleting a newer value.
+	stripe := &s.cacheEpochs[cacheEpochStripe(key)]
+	stripe.mu.Lock()
+	if s.tracker.IsHot(key) {
+		if item, ok := s.getFreshProtected(key); ok {
+			stripe.mu.Unlock()
+			return item, true
+		}
+	}
+	candidate, ok := s.probationary.Get(key)
+	if !ok {
+		stripe.mu.Unlock()
+		return cache.EntrySnapshot{}, false
+	}
+
+	observation := s.tracker.Admit(key)
+	promoting := observation.State == hotness.StateHot
+	if promoting {
+		stripe.promotionInProgress.Store(true)
+	}
+	// Remove the candidate before copying it into the protected tier so the
+	// two cache partitions never transiently exceed their shared global budget.
+	s.probationary.Delete(key)
+	stored := promoting && s.cache.PutUntil(key, candidate.Value, candidate.ExpiresAt)
+	if promoting {
+		stripe.promotionInProgress.Store(false)
+	}
+	if !stored {
+		stripe.mu.Unlock()
+		s.handleObservation(observation)
+		s.observeCache()
+		return cache.EntrySnapshot{}, false
+	}
+	stripe.mu.Unlock()
+	s.handleObservation(observation)
+	s.observeCache()
+	return candidate, true
+}
+
+func (s *Service) getFreshProtected(key string) (cache.EntrySnapshot, bool) {
 	if s.cfg.Cache.AllowStaleOnUpstreamError && s.cfg.Cache.StaleGrace > 0 {
 		return s.cache.GetStale(key, 0)
 	}
 	return s.cache.Get(key)
 }
 
-func (s *Service) storeLocal(key string, value upstream.Value, policy cachepolicy.Decision) {
+func cacheMissReason(policy cachepolicy.Decision, state hotness.State) metrics.CacheMissReason {
+	if policy.Mode != cachepolicy.ModeCache {
+		return metrics.CacheMissReasonPolicyBypass
+	}
+	if state == hotness.StateHot {
+		return metrics.CacheMissReasonNotPresent
+	}
+	return metrics.CacheMissReasonNotAdmitted
+}
+
+func (s *Service) storeLocal(key string, value upstream.Value, policy cachepolicy.Decision) bool {
 	if policy.MaxItemBytes <= 0 || cache.EstimateSize(key, value.Data) > policy.MaxItemBytes {
 		s.cache.Delete(key)
-		return
+		return false
 	}
 	ttl := s.localTTL(value.PTTL, policy.MaxLocalTTL)
 	if ttl <= 0 {
 		s.cache.Delete(key)
-		return
+		return false
 	}
-	s.cache.Put(key, value.Data, ttl)
+	return s.cache.Put(key, value.Data, ttl)
+}
+
+func (s *Service) storeProbationary(key string, value upstream.Value, policy cachepolicy.Decision) bool {
+	if s.probationary == nil || !s.tracker.IsTracked(key) {
+		return false
+	}
+	if policy.MaxItemBytes <= 0 || cache.EstimateSize(key, value.Data) > policy.MaxItemBytes {
+		s.probationary.Delete(key)
+		return false
+	}
+	ttl := s.localTTL(value.PTTL, policy.MaxLocalTTL)
+	if s.cfg.Hotness.Window > 0 && s.cfg.Hotness.Window < ttl {
+		ttl = s.cfg.Hotness.Window
+	}
+	if ttl <= 0 {
+		s.probationary.Delete(key)
+		return false
+	}
+	return s.probationary.Put(key, value.Data, ttl)
 }
 
 func (s *Service) reconcileLocalIfCurrent(key string, value upstream.Value, epoch uint64, policy cachepolicy.Decision) {
 	s.withCurrentCacheEpoch(key, epoch, func() {
-		if !value.Exists || !s.tracker.IsHot(key) {
+		if !value.Exists {
 			s.cache.Delete(key)
+			if s.probationary != nil {
+				s.probationary.Delete(key)
+			}
 			return
 		}
-		s.storeLocal(key, value, policy)
+		if s.tracker.IsHot(key) {
+			if s.probationary != nil {
+				s.probationary.Delete(key)
+			}
+			s.storeLocal(key, value, policy)
+			return
+		}
+		s.cache.Delete(key)
+		s.storeProbationary(key, value, policy)
 	})
 }
 
 func (s *Service) cacheEpoch(key string) uint64 {
 	return s.cacheEpochs[cacheEpochStripe(key)].epoch.Load()
+}
+
+func (s *Service) acquireMutationStripes(ctx context.Context, keys []string) ([]int, error) {
+	var needed [cacheEpochStripeCount]bool
+	for _, key := range keys {
+		needed[cacheEpochStripe(key)] = true
+	}
+
+	// Iterating the fixed set acquires unique stripes in ascending order, so
+	// reversed multi-key commands cannot deadlock each other.
+	acquired := make([]int, 0, min(len(keys), cacheEpochStripeCount))
+	for stripe, required := range needed {
+		if !required {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			s.releaseMutationStripes(acquired)
+			return nil, err
+		}
+		select {
+		case s.mutationGates[stripe] <- struct{}{}:
+			acquired = append(acquired, stripe)
+		case <-ctx.Done():
+			s.releaseMutationStripes(acquired)
+			return nil, ctx.Err()
+		}
+	}
+	return acquired, nil
+}
+
+func (s *Service) releaseMutationStripes(stripes []int) {
+	for i := len(stripes) - 1; i >= 0; i-- {
+		<-s.mutationGates[stripes[i]]
+	}
+}
+
+func (s *Service) finalizeWrite(command string, args []string, keys []string, result any, writeErr error) int {
+	status, acknowledged := result.(string)
+	if writeErr == nil && acknowledged && strings.EqualFold(status, "OK") && strings.EqualFold(command, "SET") &&
+		len(args) == 2 && len(keys) == 1 && keys[0] == args[0] {
+		return s.writeThroughSet(args[0], args[1])
+	}
+	return s.invalidateCacheKeys(keys)
+}
+
+func (s *Service) writeThroughSet(key, value string) int {
+	state := &s.cacheEpochs[cacheEpochStripe(key)]
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	state.epoch.Add(1)
+	policy := s.policies.Match(key)
+	_, protected := s.cache.Inspect(key)
+	probationary := false
+	if s.probationary != nil {
+		_, probationary = s.probationary.Inspect(key)
+		s.probationary.Delete(key)
+	}
+	if policy.Mode == cachepolicy.ModeCache && s.tracker.IsHot(key) {
+		if s.storeLocal(key, upstream.Value{Data: []byte(value), Exists: true, PTTL: -1}, policy) {
+			return 0
+		}
+		if protected || probationary {
+			return 1
+		}
+		return 0
+	}
+	if s.cache.Delete(key) || probationary {
+		return 1
+	}
+	return 0
 }
 
 func (s *Service) withCurrentCacheEpoch(key string, epoch uint64, mutate func()) bool {
@@ -519,21 +730,6 @@ func (s *Service) withCurrentCacheEpoch(key string, epoch uint64, mutate func())
 	return true
 }
 
-func (s *Service) advanceCacheEpochs(keys []string) {
-	var advanced [cacheEpochStripeCount]bool
-	for _, key := range keys {
-		stripe := cacheEpochStripe(key)
-		if advanced[stripe] {
-			continue
-		}
-		state := &s.cacheEpochs[stripe]
-		state.mu.Lock()
-		state.epoch.Add(1)
-		state.mu.Unlock()
-		advanced[stripe] = true
-	}
-}
-
 func (s *Service) invalidateCacheKeys(keys []string) int {
 	var advanced [cacheEpochStripeCount]bool
 	invalidated := 0
@@ -545,7 +741,11 @@ func (s *Service) invalidateCacheKeys(keys []string) int {
 			state.epoch.Add(1)
 			advanced[stripe] = true
 		}
-		if s.cache.Delete(key) {
+		deleted := s.cache.Delete(key)
+		if s.probationary != nil && s.probationary.Delete(key) {
+			deleted = true
+		}
+		if deleted {
 			invalidated++
 		}
 		state.mu.Unlock()
@@ -568,6 +768,9 @@ func (s *Service) purgeAllCache() {
 	// its stripe and is rejected after the epoch change. A refill that observes
 	// the new epoch is ordered after the purge and may populate normally.
 	s.cache.Purge()
+	if s.probationary != nil {
+		s.probationary.Purge()
+	}
 	for i := range s.cacheEpochs {
 		s.cacheEpochs[i].epoch.Add(1)
 	}
@@ -607,6 +810,7 @@ func (s *Service) handleTransitions(transitions []hotness.Transition) {
 	s.applyTransitions(transitions)
 	_, hot := s.tracker.Stats()
 	s.metrics.SetHotKeys(hot)
+	s.metrics.ObserveHotnessCapacityDrops(s.tracker.CapacityDrops())
 	s.metrics.ObserveHotnessOversizedDrops(s.tracker.OversizedObservationsDropped())
 }
 
@@ -622,6 +826,9 @@ func (s *Service) handleObservation(observation hotness.Observation) {
 	if observation.OversizedObservationDropped {
 		s.metrics.ObserveHotnessOversizedDrops(observation.OversizedObservationsDropped)
 	}
+	if observation.CapacityObservationDropped {
+		s.metrics.ObserveHotnessCapacityDrops(observation.CapacityDrops)
+	}
 }
 
 func (s *Service) applyTransitions(transitions []hotness.Transition) {
@@ -633,9 +840,19 @@ func (s *Service) applyTransitions(transitions []hotness.Transition) {
 			s.logger.Info("hot key promoted", "key_id", keyID, "from", transition.From, "to", transition.To)
 		}
 		if transition.From == hotness.StateHot && transition.To != hotness.StateHot {
-			if s.cache.Delete(transition.Key) {
-				cacheChanged = true
+			stripe := &s.cacheEpochs[cacheEpochStripe(transition.Key)]
+			stripe.mu.Lock()
+			// A delayed demotion side effect must not erase a value admitted by a
+			// newer observation of the same key.
+			if !s.tracker.IsHot(transition.Key) {
+				if s.cache.Delete(transition.Key) {
+					cacheChanged = true
+				}
+				if s.probationary != nil && s.probationary.Delete(transition.Key) {
+					cacheChanged = true
+				}
 			}
+			stripe.mu.Unlock()
 			s.metrics.Demotion()
 			s.logger.Info("hot key demoted", "key_id", keyID, "from", transition.From, "to", transition.To)
 		}
@@ -646,7 +863,7 @@ func (s *Service) applyTransitions(transitions []hotness.Transition) {
 }
 
 func (s *Service) observeCache() {
-	stats := s.cache.Stats()
+	stats := combinedCacheStats(s.cache.Stats(), s.probationary)
 	s.metrics.ObserveCache(stats.Entries, stats.Bytes, stats.Evictions)
 }
 

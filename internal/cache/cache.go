@@ -91,6 +91,25 @@ func (c *Cache) Put(key string, value []byte, ttl time.Duration) bool {
 	}
 
 	now := c.clock.Now()
+	return c.put(key, value, now, now.Add(ttl))
+}
+
+// PutUntil stores a copy of value with an absolute expiry. Unlike converting
+// an earlier TTL snapshot back into a duration, this cannot extend the
+// lifetime while an entry moves between cache tiers.
+func (c *Cache) PutUntil(key string, value []byte, expiresAt time.Time) bool {
+	if key == "" {
+		return false
+	}
+	now := c.clock.Now()
+	if !now.Before(expiresAt) {
+		c.Delete(key)
+		return false
+	}
+	return c.put(key, value, now, expiresAt)
+}
+
+func (c *Cache) put(key string, value []byte, now, expiresAt time.Time) bool {
 	copied := append([]byte(nil), value...)
 	size := EstimateSize(key, copied)
 
@@ -107,7 +126,7 @@ func (c *Cache) Put(key string, value []byte, ttl time.Duration) bool {
 		c.bytes -= ent.estimatedSize
 		ent.value = copied
 		ent.insertedAt = now
-		ent.expiresAt = now.Add(ttl)
+		ent.expiresAt = expiresAt
 		ent.lastAccess = now
 		ent.estimatedSize = size
 		c.bytes += size
@@ -117,7 +136,7 @@ func (c *Cache) Put(key string, value []byte, ttl time.Duration) bool {
 			key:           key,
 			value:         copied,
 			insertedAt:    now,
-			expiresAt:     now.Add(ttl),
+			expiresAt:     expiresAt,
 			lastAccess:    now,
 			estimatedSize: size,
 		}

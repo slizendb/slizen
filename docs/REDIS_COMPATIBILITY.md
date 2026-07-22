@@ -5,9 +5,9 @@ Slizen v0.2 is a Redis-compatible read proxy for a small command subset. Redis o
 | Command | Status | Behavior | Tested |
 | --- | --- | --- | --- |
 | `PING` | supported | Handled by Slizen and returns `PONG` or the provided payload. | unit + integration |
-| `GET` | supported | Cache-aware read in `cache` mode; upstream read only in `observe` mode. | unit + integration |
-| `MGET` | supported | Ordered multi-key read with local hits where available in `cache` mode. | unit + integration |
-| `SET` | supported | Forwarded to upstream, then affected local cache entry is invalidated. `SET GET` is rejected. | unit + integration |
+| `GET` | supported | Cache-aware read in `cache` mode, including bounded two-hit admission; upstream read only in `observe` mode. | unit + integration |
+| `MGET` | supported | Ordered multi-key read with protected hits or probationary promotions where available in `cache` mode. | unit + integration |
+| `SET` | supported | Forwarded to upstream. A successful exact option-free SET refreshes an already admitted cache-policy key; otherwise local state is invalidated. `SET GET` is rejected. | unit + integration |
 | `SETEX` | supported | Forwarded to upstream, then affected local cache entry is invalidated. | unit |
 | `PSETEX` | supported | Forwarded to upstream, then affected local cache entry is invalidated. | unit |
 | `DEL` | supported | Forwarded to upstream, then affected local cache entries are invalidated. | unit + integration |
@@ -39,7 +39,9 @@ Slizen v0.2 is a Redis-compatible read proxy for a small command subset. Redis o
 
 Any command not listed here should be treated as not supported in v0.2.
 
-Redis key bytes are forwarded unchanged for supported commands. To keep telemetry and memory bounded, keys longer than 1,024 bytes are not admitted to hotness tracking and cannot become locally cache-eligible. This does not reject or rewrite the upstream command; it is an explicit Slizen caching limitation surfaced by audit completeness metadata and a Prometheus counter.
+Redis key bytes are forwarded unchanged for supported commands. To keep telemetry and memory bounded, keys longer than 1,024 bytes are not admitted to hotness tracking and cannot enter either local cache tier. This does not reject or rewrite the upstream command; it is an explicit Slizen caching limitation surfaced by audit completeness metadata and a Prometheus counter.
+
+Two-hit admission does not expand command compatibility or memory limits. An eligible first miss may retain a probationary value, and one later read can promote and serve it while preserving the original absolute local expiry. Protected and probationary partitions remain within the configured global cache budgets. Direct writes to Redis or Valkey bypass both invalidation and exact-SET refresh and may remain stale until local TTL expiration.
 
 ## Request admission limits
 
@@ -52,4 +54,4 @@ All parsed commands are subject to bounded proxy admission before conversion or 
 | Keys in one `MGET` | 512 | 2,048 |
 | Concurrent accepted proxy connections | 1,024 | 10,000 |
 
-An over-limit command receives a RESP error and Slizen closes that connection so its enlarged read buffer can be released. The byte and argument limits are not pre-allocation parser ceilings: redcon v1.6.2 reads one complete RESP command before invoking Slizen's handler. Upstream GET and MGET responses are fully materialized and have no separate response-byte heap cap in v0.2.2. Keep the proxy on a trusted internal network and retain a container or Pod memory limit.
+An over-limit command receives a RESP error and Slizen closes that connection so its enlarged read buffer can be released. The byte and argument limits are not pre-allocation parser ceilings: redcon v1.6.2 reads one complete RESP command before invoking Slizen's handler. Upstream GET and MGET responses are fully materialized and have no separate response-byte heap cap in v0.2.3. Keep the proxy on a trusted internal network and retain a container or Pod memory limit.

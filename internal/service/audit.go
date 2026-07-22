@@ -36,6 +36,7 @@ type AuditReport struct {
 	TrackedKeys                  int          `json:"tracked_keys"`
 	TrackingCapacity             int          `json:"tracking_capacity"`
 	TrackingEvictions            uint64       `json:"tracking_evictions"`
+	CapacityObservationsDropped  uint64       `json:"capacity_observations_dropped"`
 	OversizedObservationsDropped uint64       `json:"oversized_observations_dropped"`
 	TelemetryComplete            bool         `json:"telemetry_complete"`
 	ReturnedEntries              int          `json:"returned_entries"`
@@ -80,8 +81,9 @@ func (s *Service) Audit(limit int) AuditReport {
 		TrackedKeys:                  view.Tracked,
 		TrackingCapacity:             s.cfg.Hotness.MaxTrackedKeys,
 		TrackingEvictions:            view.Evictions,
+		CapacityObservationsDropped:  view.CapacityDrops,
 		OversizedObservationsDropped: view.OversizedObservationsDropped,
-		TelemetryComplete:            view.Tracked <= len(entries) && view.Evictions == 0 && view.OversizedObservationsDropped == 0,
+		TelemetryComplete:            view.Tracked <= len(entries) && view.Evictions == 0 && view.CapacityDrops == 0 && view.OversizedObservationsDropped == 0,
 		ReturnedEntries:              len(entries),
 		Truncated:                    view.Tracked > len(entries),
 		Entries:                      entries,

@@ -1,6 +1,6 @@
 # Dependencies
 
-Slizen v0.2.2 keeps dependencies intentionally small.
+Slizen v0.2.3 keeps dependencies intentionally small.
 
 | Dependency | Purpose |
 | --- | --- |

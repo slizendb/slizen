@@ -44,6 +44,27 @@ func TestCacheTTLExpiration(t *testing.T) {
 	}
 }
 
+func TestPutUntilPreservesAbsoluteExpiry(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	c := New(1024, 10, clock)
+	expiresAt := clock.Now().Add(5 * time.Second)
+	clock.Advance(2 * time.Second)
+	if !c.PutUntil("key", []byte("value"), expiresAt) {
+		t.Fatal("put until failed")
+	}
+	item, ok := c.Inspect("key")
+	if !ok || !item.ExpiresAt.Equal(expiresAt) || item.TTL != 3*time.Second {
+		t.Fatalf("absolute-expiry item = %+v, present=%t", item, ok)
+	}
+	clock.Advance(3 * time.Second)
+	if c.PutUntil("key", []byte("replacement"), expiresAt) {
+		t.Fatal("accepted an already expired absolute deadline")
+	}
+	if _, ok := c.GetStale("key", time.Minute); ok {
+		t.Fatal("expired absolute put retained an older value")
+	}
+}
+
 func TestExpiredEntrySurvivesStatsAndInspectForStaleFallback(t *testing.T) {
 	clock := testutil.NewFakeClock(time.Unix(0, 0))
 	c := New(1024, 10, clock)

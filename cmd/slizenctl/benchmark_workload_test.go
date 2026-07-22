@@ -285,6 +285,9 @@ func TestWorkloadBenchmarkJSONContainsReleaseEvidence(t *testing.T) {
 		`"p99_ms"`,
 		`"origin_get_reduction_percent"`,
 		`"cache_hit_ratio_percent"`,
+		`"cache_misses_policy_bypass"`,
+		`"cache_misses_not_admitted"`,
+		`"cache_misses_not_present"`,
 		`"evidence_valid"`,
 		`"value_mismatches"`,
 		`"validation_reads"`,
@@ -395,25 +398,31 @@ func TestWorkloadIsolatedKeyPrefixSeparatesRuns(t *testing.T) {
 
 func TestApplyWorkloadStatusDeltaRequiresIsolatedMonotonicCounters(t *testing.T) {
 	before := statusSnapshot{
-		Version:               "0.2.0",
-		Commit:                "abc123",
-		Mode:                  "cache",
-		KeyVisibility:         "hmac",
-		Uptime:                "10s",
-		RequestsTotal:         100,
-		CacheHitsTotal:        20,
-		CacheMissesTotal:      30,
-		UpstreamRequestsTotal: 60,
-		UpstreamGETsTotal:     40,
-		InvalidationsTotal:    2,
-		PromotionsTotal:       3,
-		DemotionsTotal:        1,
+		Version:                 "0.2.0",
+		Commit:                  "abc123",
+		Mode:                    "cache",
+		KeyVisibility:           "hmac",
+		Uptime:                  "10s",
+		RequestsTotal:           100,
+		CacheHitsTotal:          20,
+		CacheMissesTotal:        30,
+		CacheMissesPolicyBypass: 4,
+		CacheMissesNotAdmitted:  16,
+		CacheMissesNotPresent:   10,
+		UpstreamRequestsTotal:   60,
+		UpstreamGETsTotal:       40,
+		InvalidationsTotal:      2,
+		PromotionsTotal:         3,
+		DemotionsTotal:          1,
 	}
 	validAfter := before
 	validAfter.Uptime = "11s"
 	validAfter.RequestsTotal += 100
 	validAfter.CacheHitsTotal += 60
 	validAfter.CacheMissesTotal += 20
+	validAfter.CacheMissesPolicyBypass += 2
+	validAfter.CacheMissesNotAdmitted += 11
+	validAfter.CacheMissesNotPresent += 7
 	validAfter.UpstreamRequestsTotal += 40
 	validAfter.UpstreamGETsTotal += 20
 
@@ -423,6 +432,9 @@ func TestApplyWorkloadStatusDeltaRequiresIsolatedMonotonicCounters(t *testing.T)
 	}
 	if phase.CacheHits != 60 || phase.CacheMisses != 20 || phase.UpstreamGETs != 20 || phase.CacheHitRatio != 75 {
 		t.Fatalf("status delta = %+v", phase)
+	}
+	if phase.CacheMissesPolicyBypass != 2 || phase.CacheMissesNotAdmitted != 11 || phase.CacheMissesNotPresent != 7 {
+		t.Fatalf("cache miss reason delta = %+v", phase)
 	}
 
 	tests := []struct {
@@ -439,6 +451,12 @@ func TestApplyWorkloadStatusDeltaRequiresIsolatedMonotonicCounters(t *testing.T)
 			name: "counter decrease",
 			change: func(after *statusSnapshot) {
 				after.UpstreamGETsTotal = before.UpstreamGETsTotal - 1
+			},
+		},
+		{
+			name: "cache miss reason counter decrease",
+			change: func(after *statusSnapshot) {
+				after.CacheMissesNotAdmitted = before.CacheMissesNotAdmitted - 1
 			},
 		},
 		{

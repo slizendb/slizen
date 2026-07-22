@@ -111,6 +111,15 @@ validate_workload_evidence() {
       and .origin.validation_mismatches == 0
       and .slizen.validation_mismatches == 0
       and (.slizen.cache_hits | type == "number")
+      and (.slizen.cache_misses | type == "number")
+      and (.slizen.cache_misses_policy_bypass | type == "number")
+      and (.slizen.cache_misses_not_admitted | type == "number")
+      and (.slizen.cache_misses_not_present | type == "number")
+      and .slizen.cache_misses == (
+        .slizen.cache_misses_policy_bypass
+        + .slizen.cache_misses_not_admitted
+        + .slizen.cache_misses_not_present
+      )
       and (.cache_hit_ratio_percent | type == "number")
       and (.origin_get_reduction_percent | type == "number")
     )
@@ -122,7 +131,7 @@ validate_workload_evidence() {
       and .origin_get_reduction_percent > 0
     )
   ' "${result_file}" >/dev/null || {
-    echo "release workload evidence did not satisfy the v0.2 gate: ${result_file}" >&2
+    echo "release workload evidence did not satisfy the v0.2.3 gate: ${result_file}" >&2
     return 1
   }
 }
@@ -156,7 +165,7 @@ docker info >/dev/null 2>&1 || {
 }
 
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-slizen-release-check-$$}"
-export SLIZEN_VERSION="${SLIZEN_VERSION:-0.2.2}"
+export SLIZEN_VERSION="${SLIZEN_VERSION:-0.2.3}"
 export SLIZEN_COMMIT="${SLIZEN_COMMIT:-$(release_commit)}"
 export SLIZEN_VALKEY_PORT="${SLIZEN_VALKEY_PORT:-16379}"
 export SLIZEN_PROXY_PORT="${SLIZEN_PROXY_PORT:-16380}"

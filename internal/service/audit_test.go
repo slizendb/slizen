@@ -147,6 +147,26 @@ func TestAuditMarksTelemetryIncompleteAfterTrackingEviction(t *testing.T) {
 	}
 }
 
+func TestAuditMarksTelemetryIncompleteAfterCapacityDrop(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(1, 0))
+	svc := newTestServiceWithConfig(testutil.NewFakeUpstream(), clock, func(cfg *config.Config) {
+		cfg.Hotness.MaxTrackedKeys = 1
+	})
+	svc.tracker.Observe("hot")
+	svc.tracker.Admit("hot")
+	if _, err := svc.Get(context.Background(), "unseen"); err != nil {
+		t.Fatal(err)
+	}
+
+	report := svc.Audit(1)
+	if report.CapacityObservationsDropped != 1 || report.TrackingEvictions != 0 || report.TelemetryComplete {
+		t.Fatalf("audit completeness after capacity drop = %+v", report)
+	}
+	if report.TrackedKeys != 1 || len(report.Entries) != 1 {
+		t.Fatalf("HOT victim was not retained: %+v", report)
+	}
+}
+
 func TestAuditMarksTelemetryIncompleteAfterOversizedObservation(t *testing.T) {
 	clock := testutil.NewFakeClock(time.Unix(1, 0))
 	svc := newTestServiceWithConfig(testutil.NewFakeUpstream(), clock, func(cfg *config.Config) {
