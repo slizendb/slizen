@@ -91,6 +91,40 @@ func warmHandlerCache(t *testing.T, svc *service.Service, clock *testutil.FakeCl
 	}
 }
 
+func TestFastGetHandlerPreservesMixedCaseAndBinaryKey(t *testing.T) {
+	cfg := config.Default()
+	key := string([]byte{'k', 0, 0xff})
+	up := testutil.NewFakeUpstream()
+	up.Put(key, []byte("value"), 0)
+	svc := service.New(service.Options{Config: cfg, Upstream: up})
+	t.Cleanup(func() { _ = svc.Close() })
+	conn := &fakeConn{}
+
+	NewServer(cfg.Proxy, svc, nil).handle(conn, redcon.Command{
+		Args: [][]byte{[]byte("gEt"), []byte(key)},
+	})
+
+	if len(conn.writes) != 1 || conn.writes[0] != "$value" {
+		t.Fatalf("GET response = %#v, want one bulk value", conn.writes)
+	}
+	if got := up.GetCallCount(key); got != 1 {
+		t.Fatalf("upstream GET calls = %d, want 1", got)
+	}
+}
+
+func TestFastGetHandlerChecksArity(t *testing.T) {
+	cfg := config.Default()
+	svc := service.New(service.Options{Config: cfg, Upstream: testutil.NewFakeUpstream()})
+	t.Cleanup(func() { _ = svc.Close() })
+	conn := &fakeConn{}
+
+	NewServer(cfg.Proxy, svc, nil).handle(conn, redcon.Command{Args: [][]byte{[]byte("GET")}})
+
+	if len(conn.writes) != 1 || !strings.Contains(conn.writes[0], "wrong number of arguments") {
+		t.Fatalf("GET response = %#v, want arity error", conn.writes)
+	}
+}
+
 func TestRejectedMutationsDoNotReachUpstream(t *testing.T) {
 	cfg := config.Default()
 	svc := service.New(service.Options{Config: cfg, Upstream: testutil.NewFakeUpstream()})

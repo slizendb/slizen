@@ -62,10 +62,14 @@ validate_workload_evidence() {
   local key_prefix="$2"
   local expected_version="$3"
   local expected_commit="$4"
+  local expected_request_limit="$5"
+  local expected_flash_every="$6"
   jq -e \
     --arg key_prefix "${key_prefix}" \
     --arg expected_version "${expected_version}" \
-    --arg expected_commit "${expected_commit}" '
+    --arg expected_commit "${expected_commit}" \
+    --argjson expected_request_limit "${expected_request_limit}" \
+    --argjson expected_flash_every "${expected_flash_every}" '
     def known_version:
       type == "string" and length > 0 and ascii_downcase != "unknown";
     .name == "Slizen Release Workload Benchmark"
@@ -80,10 +84,26 @@ validate_workload_evidence() {
       end
     )
     and (.runtime_versions.origin | known_version)
+    and .max_requests_per_phase == $expected_request_limit
+    and .flash_key_moves_every_operations == $expected_flash_every
     and (.scenarios | type == "array" and length == 4)
     and ((.scenarios | map(.name) | sort) == ["moving-flash", "skew-80-20", "skew-99-1", "uniform"])
     and all(.scenarios[];
       .evidence_valid == true
+      and .origin.operation_attempts == $expected_request_limit
+      and .origin.termination_reason == "request_limit"
+      and (.origin.read_latency.samples + .origin.write_latency.samples) == .origin.operation_attempts
+      and .origin.read_ordering_wait_latency.samples == .origin.read_latency.samples
+      and .origin.write_ordering_wait_latency.samples == .origin.write_latency.samples
+      and .origin.final_validation_latency.samples == .origin.validation_reads
+      and .origin.requests == (.origin.operation_attempts + .origin.validation_reads)
+      and .slizen.operation_attempts == $expected_request_limit
+      and .slizen.termination_reason == "request_limit"
+      and (.slizen.read_latency.samples + .slizen.write_latency.samples) == .slizen.operation_attempts
+      and .slizen.read_ordering_wait_latency.samples == .slizen.read_latency.samples
+      and .slizen.write_ordering_wait_latency.samples == .slizen.write_latency.samples
+      and .slizen.final_validation_latency.samples == .slizen.validation_reads
+      and .slizen.requests == (.slizen.operation_attempts + .slizen.validation_reads)
       and .origin.value_mismatches == 0
       and .slizen.value_mismatches == 0
       and .origin.validation_failures == 0
@@ -146,6 +166,9 @@ PROXY_ADDR="${PROXY_ADDR:-127.0.0.1:${SLIZEN_PROXY_PORT}}"
 ORIGIN_ADDR="${ORIGIN_ADDR:-127.0.0.1:${SLIZEN_VALKEY_PORT}}"
 WORKLOAD_KEY_PREFIX="product:slizen:release:v${SLIZEN_VERSION}"
 WORKLOAD_RESULT="./tmp/slizen-workload-result.json"
+WORKLOAD_REQUESTS=100000
+WORKLOAD_DURATION=30s
+WORKLOAD_FLASH_EVERY=20000
 trap cleanup_release_stack_best_effort EXIT
 
 step "go checks"
@@ -189,13 +212,13 @@ go run -ldflags "-X github.com/slizendb/slizen/internal/buildinfo.Version=${SLIZ
   --value-size 128 \
   --read-ratio 95 \
   --concurrency 32 \
-  --duration 10s \
-  --requests 1000000 \
+  --duration "${WORKLOAD_DURATION}" \
+  --requests "${WORKLOAD_REQUESTS}" \
   --seed 42 \
-  --flash-every 40000 \
+  --flash-every "${WORKLOAD_FLASH_EVERY}" \
   --output text \
   --json-file "${WORKLOAD_RESULT}"
-validate_workload_evidence "${WORKLOAD_RESULT}" "${WORKLOAD_KEY_PREFIX}" "${SLIZEN_VERSION}" "${SLIZEN_COMMIT}"
+validate_workload_evidence "${WORKLOAD_RESULT}" "${WORKLOAD_KEY_PREFIX}" "${SLIZEN_VERSION}" "${SLIZEN_COMMIT}" "${WORKLOAD_REQUESTS}" "${WORKLOAD_FLASH_EVERY}"
 cleanup_release_stack
 trap - EXIT
 

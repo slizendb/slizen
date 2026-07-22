@@ -74,6 +74,16 @@ type View struct {
 	OversizedObservationsDropped uint64
 }
 
+// Observation is the result of observing one key. The key state and aggregate
+// telemetry are captured under the same lock as the observation.
+type Observation struct {
+	Transitions                  []Transition
+	State                        State
+	Hot                          int
+	OversizedObservationDropped  bool
+	OversizedObservationsDropped uint64
+}
+
 func New(cfg Config) *Tracker {
 	if cfg.Clock == nil {
 		cfg.Clock = realClock{}
@@ -100,6 +110,10 @@ func New(cfg Config) *Tracker {
 }
 
 func (t *Tracker) Observe(key string) []Transition {
+	return t.ObserveWithState(key).Transitions
+}
+
+func (t *Tracker) ObserveWithState(key string) Observation {
 	now := t.clock.Now()
 
 	t.mu.Lock()
@@ -110,7 +124,12 @@ func (t *Tracker) Observe(key string) []Transition {
 		if len(key) > MaxTrackedKeyBytes {
 			t.oversizedObservationsDropped++
 		}
-		return transitions
+		return Observation{
+			Transitions:                  transitions,
+			Hot:                          t.hot,
+			OversizedObservationDropped:  len(key) > MaxTrackedKeyBytes,
+			OversizedObservationsDropped: t.oversizedObservationsDropped,
+		}
 	}
 	ent, evictionTransition := t.getOrCreateLocked(key, now)
 	if evictionTransition != nil {
@@ -118,7 +137,37 @@ func (t *Tracker) Observe(key string) []Transition {
 	}
 	ent.count++
 	ent.lastSeen = now
-	return transitions
+	if transition := t.commitGuaranteedPromotionLocked(ent); transition != nil {
+		transitions = append(transitions, *transition)
+	}
+	return Observation{
+		Transitions:                  transitions,
+		State:                        ent.state,
+		Hot:                          t.hot,
+		OversizedObservationsDropped: t.oversizedObservationsDropped,
+	}
+}
+
+// commitGuaranteedPromotionLocked removes boundary-alignment delay from the
+// last required hot window. Counts in the open window can only increase, so
+// once their full-window rate floor makes the next EWMA score reach the
+// promotion threshold, waiting for the wall-clock boundary cannot change the
+// decision. At least one completed hot window is still required.
+func (t *Tracker) commitGuaranteedPromotionLocked(ent *entry) *Transition {
+	if ent.state != StateWarm || ent.hotWindows <= 0 || ent.hotWindows+1 < t.cfg.MinimumHotWindows {
+		return nil
+	}
+	currentRateFloor := float64(ent.count) / t.cfg.Window.Seconds()
+	nextScoreFloor := t.cfg.EWMAAlpha*currentRateFloor + (1-t.cfg.EWMAAlpha)*ent.score
+	if nextScoreFloor < t.cfg.PromotionThreshold {
+		return nil
+	}
+
+	before := ent.state
+	ent.state = StateHot
+	ent.hotWindows++
+	t.adjustHotCountLocked(before, ent.state)
+	return &Transition{Key: ent.key, From: before, To: ent.state}
 }
 
 func (t *Tracker) Advance() []Transition {

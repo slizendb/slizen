@@ -316,6 +316,26 @@ func (s *Server) handle(conn redcon.Conn, cmd redcon.Command) {
 		}
 		return
 	}
+	if len(cmd.Args) > 0 && bytes.EqualFold(cmd.Args[0], []byte("GET")) {
+		command = "GET"
+		if len(cmd.Args) != 2 {
+			result = "error"
+			conn.WriteError(wrongArity(command))
+			return
+		}
+		value, err := s.svc.Get(s.requestCtx, string(cmd.Args[1]))
+		if err != nil {
+			result = "error"
+			writeUpstreamError(conn)
+			return
+		}
+		if !value.Exists {
+			conn.WriteNull()
+			return
+		}
+		conn.WriteBulk(value.Data)
+		return
+	}
 
 	parsed, err := ParseCommand(cmd)
 	if err != nil {
@@ -368,23 +388,6 @@ func (s *Server) handle(conn redcon.Conn, cmd redcon.Command) {
 			return
 		}
 		conn.WriteString("OK")
-	case "GET":
-		if len(args) != 2 {
-			result = "error"
-			conn.WriteError(wrongArity(command))
-			return
-		}
-		value, err := s.svc.Get(ctx, args[1])
-		if err != nil {
-			result = "error"
-			writeUpstreamError(conn)
-			return
-		}
-		if !value.Exists {
-			conn.WriteNull()
-			return
-		}
-		conn.WriteBulk(value.Data)
 	case "MGET":
 		if len(args) < 2 {
 			result = "error"

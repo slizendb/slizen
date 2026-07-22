@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 type RedisClient struct {
 	client *redis.Client
 }
+
+const redisPTTLMissing = time.Duration(-2)
 
 func NewRedisClient(cfg config.UpstreamConfig) *RedisClient {
 	return &RedisClient{
@@ -33,18 +36,31 @@ func (c *RedisClient) Ping(ctx context.Context) error {
 }
 
 func (c *RedisClient) Get(ctx context.Context, key string) (Value, error) {
-	data, err := c.client.Get(ctx, key).Bytes()
+	pipe := c.client.Pipeline()
+	get := pipe.Get(ctx, key)
+	pttl := pipe.PTTL(ctx, key)
+	_, execErr := pipe.Exec(ctx)
+
+	data, err := get.Bytes()
 	if err == redis.Nil {
+		var redisErr redis.Error
+		// A Redis reply error is harmless after a confirmed miss; an interrupted pipeline is not.
+		if execErr != nil && !errors.As(execErr, &redisErr) {
+			return Value{}, execErr
+		}
 		return Value{Exists: false}, nil
 	}
 	if err != nil {
 		return Value{}, err
 	}
-	ttl, err := c.client.PTTL(ctx, key).Result()
+	ttl, err := pttl.Result()
 	if err != nil {
 		return Value{}, err
 	}
-	if ttl == -2*time.Millisecond {
+	if execErr != nil {
+		return Value{}, execErr
+	}
+	if ttl == redisPTTLMissing {
 		return Value{Exists: false}, nil
 	}
 	return Value{Data: append([]byte(nil), data...), Exists: true, PTTL: ttl}, nil
@@ -85,7 +101,7 @@ func (c *RedisClient) MGet(ctx context.Context, keys []string) ([]Value, error) 
 			data = []byte(fmt.Sprint(v))
 		}
 		ttl := ttlCmds[i].Val()
-		if ttl == -2*time.Millisecond {
+		if ttl == redisPTTLMissing {
 			values[i] = Value{Exists: false}
 			continue
 		}

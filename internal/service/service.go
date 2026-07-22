@@ -194,21 +194,25 @@ func (s *Service) Get(ctx context.Context, key string) (upstream.Value, error) {
 		return upstream.Value{}, err
 	}
 	policy := s.policies.Match(key)
+	var observedState hotness.State
 	if policy.Mode != cachepolicy.ModeDeny {
-		s.handleTransitions(s.tracker.Observe(key))
+		observation := s.tracker.ObserveWithState(key)
+		s.handleObservation(observation)
+		observedState = observation.State
 	}
 
 	if policy.Mode == cachepolicy.ModeCache {
-		if item, ok := s.getFreshCached(key); ok {
+		if item, ok := s.getFreshCachedInState(key, observedState); ok {
 			s.metrics.CacheHit("GET")
-			s.observeCache()
 			return upstream.Value{Exists: true, Data: item.Value, PTTL: item.TTL}, nil
 		}
 	}
 	s.metrics.CacheMiss("GET")
+	readCtx, cancel := context.WithTimeout(ctx, s.sharedReadTimeout())
+	defer cancel()
 
 	if policy.Mode != cachepolicy.ModeCache {
-		value, err := s.fetchUpstreamGet(ctx, key)
+		value, err := s.fetchUpstreamGet(readCtx, key)
 		s.observeCache()
 		return value, err
 	}
@@ -232,8 +236,8 @@ func (s *Service) Get(ctx context.Context, key string) (upstream.Value, error) {
 	})
 	var result singleflight.Result
 	select {
-	case <-ctx.Done():
-		return upstream.Value{}, ctx.Err()
+	case <-readCtx.Done():
+		return upstream.Value{}, readCtx.Err()
 	case result = <-resultCh:
 	}
 	if result.Shared {
@@ -275,11 +279,14 @@ func (s *Service) MGet(ctx context.Context, keys []string) ([]upstream.Value, er
 	missingReads := make([]missingRead, 0, len(keys))
 	for i, key := range keys {
 		policy := s.policies.Match(key)
+		var observedState hotness.State
 		if policy.Mode != cachepolicy.ModeDeny {
-			s.handleTransitions(s.tracker.Observe(key))
+			observation := s.tracker.ObserveWithState(key)
+			s.handleObservation(observation)
+			observedState = observation.State
 		}
 		if policy.Mode == cachepolicy.ModeCache {
-			if item, ok := s.getFreshCached(key); ok {
+			if item, ok := s.getFreshCachedInState(key, observedState); ok {
 				s.metrics.CacheHit("MGET")
 				out[i] = upstream.Value{Exists: true, Data: item.Value, PTTL: item.TTL}
 				continue
@@ -295,7 +302,6 @@ func (s *Service) MGet(ctx context.Context, keys []string) ([]upstream.Value, er
 	}
 
 	if len(missingKeys) == 0 {
-		s.observeCache()
 		return out, nil
 	}
 
@@ -464,8 +470,8 @@ func (s *Service) PurgeCache(key string) bool {
 	return ok
 }
 
-func (s *Service) getFreshCached(key string) (cache.EntrySnapshot, bool) {
-	if !s.tracker.IsHot(key) {
+func (s *Service) getFreshCachedInState(key string, state hotness.State) (cache.EntrySnapshot, bool) {
+	if state != hotness.StateHot {
 		s.cache.Delete(key)
 		return cache.EntrySnapshot{}, false
 	}
@@ -598,6 +604,28 @@ func (s *Service) localTTL(upstreamTTL, policyMaxTTL time.Duration) time.Duratio
 }
 
 func (s *Service) handleTransitions(transitions []hotness.Transition) {
+	s.applyTransitions(transitions)
+	_, hot := s.tracker.Stats()
+	s.metrics.SetHotKeys(hot)
+	s.metrics.ObserveHotnessOversizedDrops(s.tracker.OversizedObservationsDropped())
+}
+
+func (s *Service) handleObservation(observation hotness.Observation) {
+	s.applyTransitions(observation.Transitions)
+	if len(observation.Transitions) > 0 {
+		// Observations are applied after the tracker lock is released. Read the
+		// current aggregate on the rare transition path so concurrent callers
+		// cannot publish an older snapshot after a newer one.
+		_, hot := s.tracker.Stats()
+		s.metrics.SetHotKeys(hot)
+	}
+	if observation.OversizedObservationDropped {
+		s.metrics.ObserveHotnessOversizedDrops(observation.OversizedObservationsDropped)
+	}
+}
+
+func (s *Service) applyTransitions(transitions []hotness.Transition) {
+	cacheChanged := false
 	for _, transition := range transitions {
 		keyID := privacy.HMACKeyIdentifier(transition.Key, s.cfg.Privacy.KeyHashSecret)
 		if transition.To == hotness.StateHot && transition.From != hotness.StateHot {
@@ -605,14 +633,16 @@ func (s *Service) handleTransitions(transitions []hotness.Transition) {
 			s.logger.Info("hot key promoted", "key_id", keyID, "from", transition.From, "to", transition.To)
 		}
 		if transition.From == hotness.StateHot && transition.To != hotness.StateHot {
-			s.cache.Delete(transition.Key)
+			if s.cache.Delete(transition.Key) {
+				cacheChanged = true
+			}
 			s.metrics.Demotion()
 			s.logger.Info("hot key demoted", "key_id", keyID, "from", transition.From, "to", transition.To)
 		}
 	}
-	_, hot := s.tracker.Stats()
-	s.metrics.SetHotKeys(hot)
-	s.metrics.ObserveHotnessOversizedDrops(s.tracker.OversizedObservationsDropped())
+	if cacheChanged {
+		s.observeCache()
+	}
 }
 
 func (s *Service) observeCache() {

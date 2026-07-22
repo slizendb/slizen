@@ -3,6 +3,7 @@ package hotness
 import (
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,14 +39,16 @@ func TestHotnessPromotionHysteresisAndCooldown(t *testing.T) {
 	}
 
 	tracker.Observe("k")
-	tracker.Observe("k")
-	clock.Advance(time.Second)
-	transitions = tracker.Advance()
+	transitions = tracker.Observe("k")
 	if len(transitions) != 1 || transitions[0].To != StateHot {
-		t.Fatalf("expected hot transition, got %+v", transitions)
+		t.Fatalf("expected guaranteed hot transition, got %+v", transitions)
 	}
 	if !tracker.IsHot("k") {
 		t.Fatal("expected hot key")
+	}
+	clock.Advance(time.Second)
+	if transitions := tracker.Advance(); len(transitions) != 0 {
+		t.Fatalf("completed guaranteed window emitted duplicate transition: %+v", transitions)
 	}
 
 	clock.Advance(time.Second)
@@ -57,6 +60,184 @@ func TestHotnessPromotionHysteresisAndCooldown(t *testing.T) {
 	transitions = tracker.Advance()
 	if len(transitions) != 1 || transitions[0].To != StateCold {
 		t.Fatalf("expected cold transition, got %+v", transitions)
+	}
+}
+
+func TestGuaranteedFinalHotWindowPromotesBeforeBoundary(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	tracker := New(Config{
+		Window:             time.Second,
+		EWMAAlpha:          0.5,
+		PromotionThreshold: 100,
+		DemotionThreshold:  20,
+		MinimumHotWindows:  2,
+		Cooldown:           time.Second,
+		MaxTrackedKeys:     10,
+		Clock:              clock,
+	})
+
+	// The first completed window produces an EWMA score of exactly 100 and
+	// satisfies only the first of the two required hot windows.
+	for range 200 {
+		tracker.Observe("k")
+	}
+	if tracker.IsHot("k") {
+		t.Fatal("current-window traffic bypassed the required completed hot window")
+	}
+	clock.Advance(time.Second)
+	transitions := tracker.Advance()
+	if len(transitions) != 1 || transitions[0] != (Transition{Key: "k", From: StateCold, To: StateWarm}) {
+		t.Fatalf("first-window transitions = %+v, want COLD->WARM", transitions)
+	}
+
+	// With alpha 0.5 and a previous score of 100, 99 requests can produce at
+	// most a next-window score of 99.5. Promotion must remain impossible.
+	for i := 0; i < 99; i++ {
+		observation := tracker.ObserveWithState("k")
+		if observation.State != StateWarm || len(observation.Transitions) != 0 {
+			t.Fatalf("observation %d = %+v, want unchanged WARM state", i+1, observation)
+		}
+	}
+
+	// The 100th request guarantees a completed-window score of at least 100,
+	// even if no later request arrives. The final required hot window can be
+	// committed without waiting for its wall-clock boundary.
+	promoted := tracker.ObserveWithState("k")
+	if promoted.State != StateHot || promoted.Hot != 1 {
+		t.Fatalf("guaranteed observation = %+v, want one HOT key", promoted)
+	}
+	if len(promoted.Transitions) != 1 || promoted.Transitions[0] != (Transition{Key: "k", From: StateWarm, To: StateHot}) {
+		t.Fatalf("guaranteed transitions = %+v, want WARM->HOT", promoted.Transitions)
+	}
+
+	clock.Advance(time.Second)
+	if transitions := tracker.Advance(); len(transitions) != 0 {
+		t.Fatalf("completed guaranteed window emitted duplicate transition: %+v", transitions)
+	}
+	snapshots := tracker.Snapshots(1)
+	if len(snapshots) != 1 || snapshots[0].State != StateHot || snapshots[0].Score != 100 || snapshots[0].RequestRate != 100 {
+		t.Fatalf("completed guaranteed window snapshot = %+v, want HOT score/rate 100", snapshots)
+	}
+}
+
+func TestGuaranteedPromotionHonorsThreeRequiredWindows(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	tracker := New(Config{
+		Window:             time.Second,
+		EWMAAlpha:          1,
+		PromotionThreshold: 2,
+		DemotionThreshold:  1,
+		MinimumHotWindows:  3,
+		Cooldown:           time.Second,
+		MaxTrackedKeys:     10,
+		Clock:              clock,
+	})
+
+	for range 2 {
+		tracker.Observe("k")
+	}
+	clock.Advance(time.Second)
+	if transitions := tracker.Advance(); len(transitions) != 1 || transitions[0].To != StateWarm {
+		t.Fatalf("first-window transitions = %+v, want COLD->WARM", transitions)
+	}
+
+	for range 2 {
+		if transitions := tracker.Observe("k"); len(transitions) != 0 {
+			t.Fatalf("second-window traffic promoted before three required windows: %+v", transitions)
+		}
+	}
+	clock.Advance(time.Second)
+	if transitions := tracker.Advance(); len(transitions) != 0 || tracker.IsHot("k") {
+		t.Fatalf("second-window boundary = %+v, want unchanged WARM", transitions)
+	}
+
+	tracker.Observe("k")
+	transitions := tracker.Observe("k")
+	if len(transitions) != 1 || transitions[0] != (Transition{Key: "k", From: StateWarm, To: StateHot}) {
+		t.Fatalf("third-window transitions = %+v, want WARM->HOT", transitions)
+	}
+}
+
+func TestGuaranteedPromotionDoesNotBridgeSkippedWindows(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	tracker := testTracker(clock)
+
+	for range 2 {
+		tracker.Observe("k")
+	}
+	clock.Advance(time.Second)
+	if transitions := tracker.Advance(); len(transitions) != 1 || transitions[0].To != StateWarm {
+		t.Fatalf("first-window transitions = %+v, want COLD->WARM", transitions)
+	}
+
+	// Empty windows break the qualifying streak before the new observations
+	// are counted. One later guaranteed window must therefore only warm the key.
+	clock.Advance(2 * time.Second)
+	if transitions := tracker.Advance(); len(transitions) != 1 || transitions[0] != (Transition{Key: "k", From: StateWarm, To: StateCold}) {
+		t.Fatalf("idle transitions = %+v, want WARM->COLD", transitions)
+	}
+	for range 2 {
+		if transitions := tracker.Observe("k"); len(transitions) != 0 {
+			t.Fatalf("new current-window traffic bridged the idle gap: %+v", transitions)
+		}
+	}
+	if tracker.IsHot("k") {
+		t.Fatal("one new qualifying window bypassed minimum_hot_windows after an idle gap")
+	}
+
+	clock.Advance(time.Second)
+	if transitions := tracker.Advance(); len(transitions) != 1 || transitions[0].To != StateWarm {
+		t.Fatalf("post-idle transitions = %+v, want COLD->WARM", transitions)
+	}
+}
+
+func TestGuaranteedPromotionConcurrentExactlyOnce(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	tracker := New(Config{
+		Window:             time.Second,
+		EWMAAlpha:          1,
+		PromotionThreshold: 64,
+		DemotionThreshold:  1,
+		MinimumHotWindows:  2,
+		Cooldown:           time.Second,
+		MaxTrackedKeys:     10,
+		Clock:              clock,
+	})
+
+	for range 64 {
+		tracker.Observe("k")
+	}
+	clock.Advance(time.Second)
+	if transitions := tracker.Advance(); len(transitions) != 1 || transitions[0].To != StateWarm {
+		t.Fatalf("first-window transitions = %+v, want COLD->WARM", transitions)
+	}
+
+	observations := make(chan Observation, 64)
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			observations <- tracker.ObserveWithState("k")
+		}()
+	}
+	wg.Wait()
+	close(observations)
+
+	promotions := 0
+	for observation := range observations {
+		for _, transition := range observation.Transitions {
+			if transition != (Transition{Key: "k", From: StateWarm, To: StateHot}) {
+				t.Fatalf("unexpected concurrent transition: %+v", transition)
+			}
+			promotions++
+		}
+	}
+	if promotions != 1 {
+		t.Fatalf("concurrent promotions = %d, want exactly 1", promotions)
+	}
+	if tracked, hot := tracker.Stats(); tracked != 1 || hot != 1 {
+		t.Fatalf("concurrent stats = tracked:%d hot:%d, want 1/1", tracked, hot)
 	}
 }
 
@@ -124,6 +305,41 @@ func TestTrackingEvictionReturnsHotDemotion(t *testing.T) {
 	transitions := tracker.Observe("new")
 	if len(transitions) != 1 || transitions[0] != (Transition{Key: "hot", From: StateHot, To: StateCold}) {
 		t.Fatalf("eviction transitions = %+v", transitions)
+	}
+}
+
+func TestObserveWithStateReturnsCurrentStateAndTelemetry(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	tracker := New(Config{
+		Window: time.Second, EWMAAlpha: 1, PromotionThreshold: 1,
+		DemotionThreshold: 0.1, MinimumHotWindows: 1,
+		Cooldown: time.Second, MaxTrackedKeys: 1, Clock: clock,
+	})
+
+	first := tracker.ObserveWithState("first")
+	if first.State != StateCold || first.Hot != 0 || first.OversizedObservationsDropped != 0 {
+		t.Fatalf("first observation = %+v, want cold state and zero telemetry", first)
+	}
+	clock.Advance(time.Second)
+	promoted := tracker.ObserveWithState("first")
+	if promoted.State != StateHot || promoted.Hot != 1 {
+		t.Fatalf("promoted observation = %+v, want hot state and one hot key", promoted)
+	}
+	if len(promoted.Transitions) != 1 || promoted.Transitions[0].To != StateHot {
+		t.Fatalf("promotion transitions = %+v", promoted.Transitions)
+	}
+
+	replacement := tracker.ObserveWithState("replacement")
+	if replacement.State != StateCold || replacement.Hot != 0 {
+		t.Fatalf("replacement observation = %+v, want cold state and zero hot keys", replacement)
+	}
+	if len(replacement.Transitions) != 1 || replacement.Transitions[0] != (Transition{Key: "first", From: StateHot, To: StateCold}) {
+		t.Fatalf("replacement transitions = %+v", replacement.Transitions)
+	}
+
+	oversized := tracker.ObserveWithState(strings.Repeat("k", MaxTrackedKeyBytes+1))
+	if oversized.State != "" || oversized.Hot != 0 || !oversized.OversizedObservationDropped || oversized.OversizedObservationsDropped != 1 {
+		t.Fatalf("oversized observation = %+v, want untracked state and one drop", oversized)
 	}
 }
 

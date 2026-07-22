@@ -30,6 +30,9 @@ type Recorder struct {
 	requestLatency        *prometheus.HistogramVec
 	cacheHits             *prometheus.CounterVec
 	cacheMisses           *prometheus.CounterVec
+	getRequestOK          prometheus.Counter
+	getRequestOKLatency   prometheus.Observer
+	getCacheHits          prometheus.Counter
 	cacheEntries          prometheus.Gauge
 	cacheBytes            prometheus.Gauge
 	cacheEvictions        prometheus.Counter
@@ -75,6 +78,9 @@ func New() *Recorder {
 	r.invalidations = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "slizen_invalidations_total", Help: "Total write-driven cache invalidations."}, []string{"reason"})
 	r.coalesced = prometheus.NewCounter(prometheus.CounterOpts{Name: "slizen_coalesced_requests_total", Help: "Total cache-miss requests served by singleflight coalescing."})
 	r.hotnessOversizedDrops = prometheus.NewCounter(prometheus.CounterOpts{Name: "slizen_hotness_oversized_observations_dropped_total", Help: "Total observations skipped because the Redis key exceeded the hotness tracking byte limit."})
+	r.getRequestOK = r.requests.WithLabelValues("GET", "ok")
+	r.getRequestOKLatency = r.requestLatency.WithLabelValues("GET", "ok")
+	r.getCacheHits = r.cacheHits.WithLabelValues("GET")
 
 	r.registry.MustRegister(
 		r.requests,
@@ -104,6 +110,11 @@ func (r *Recorder) Handler() http.Handler {
 func (r *Recorder) ObserveRequest(command, result string, d time.Duration) {
 	command = commandLabel(command)
 	r.totalRequests.Add(1)
+	if command == "GET" && result == "ok" {
+		r.getRequestOK.Inc()
+		r.getRequestOKLatency.Observe(d.Seconds())
+		return
+	}
 	r.requests.WithLabelValues(command, result).Inc()
 	r.requestLatency.WithLabelValues(command, result).Observe(d.Seconds())
 }
@@ -111,6 +122,10 @@ func (r *Recorder) ObserveRequest(command, result string, d time.Duration) {
 func (r *Recorder) CacheHit(command string) {
 	command = commandLabel(command)
 	r.totalCacheHits.Add(1)
+	if command == "GET" {
+		r.getCacheHits.Inc()
+		return
+	}
 	r.cacheHits.WithLabelValues(command).Inc()
 }
 
