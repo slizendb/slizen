@@ -46,7 +46,7 @@ docker run --rm \
   ghcr.io/slizendb/slizen:0.2
 ```
 
-See the [latest release](https://github.com/slizendb/slizen/releases/latest), [v0.2.1 release notes](docs/RELEASE_NOTES_v0.2.1.md), and [configuration safety guide](docs/CONFIGURATION.md).
+See the [latest release](https://github.com/slizendb/slizen/releases/latest), [v0.2.2 release notes](docs/RELEASE_NOTES_v0.2.2.md), and [configuration safety guide](docs/CONFIGURATION.md).
 
 ## Quick Start From Source
 
@@ -251,6 +251,7 @@ Release prep:
 - [docs/RELEASE_NOTES_v0.1.md](docs/RELEASE_NOTES_v0.1.md)
 - [docs/RELEASE_NOTES_v0.2.md](docs/RELEASE_NOTES_v0.2.md)
 - [docs/RELEASE_NOTES_v0.2.1.md](docs/RELEASE_NOTES_v0.2.1.md)
+- [docs/RELEASE_NOTES_v0.2.2.md](docs/RELEASE_NOTES_v0.2.2.md)
 
 ## Limitations
 
@@ -260,13 +261,13 @@ Release prep:
 - Direct upstream writes may remain stale until local TTL expiration.
 - Slizen is not fully Redis-compatible.
 - `observe` mode is intended for safe heat discovery and does not reduce upstream read load.
-- Negative caching is not implemented in v0.2.1; the reserved `cache.negative_ttl` setting must remain `0s`.
+- Negative caching is not implemented in v0.2.2; the reserved `cache.negative_ttl` setting must remain `0s`.
 - Admin API authentication is not built in.
 - Production use requires careful workload testing.
 
 ## Roadmap
 
-v0.2.1 launch hardening was [released on 2026-07-22](https://github.com/slizendb/slizen/releases/tag/v0.2.1). It preserves the single-node safe-staging scope while tightening safe defaults, bounds, evidence, and release hygiene. v0.3 moves direct-origin invalidation forward with Redis/Valkey server-assisted tracking and fail-safe behavior. Mesh, an Operator, and a hosted control plane are later hypotheses that require evidence from real users rather than version promises.
+The v0.2.2 performance release candidate is complete; tag, image, and immutable evidence publication remain. It preserves the single-node safe-staging scope while reducing measured proxy tax and improving workload attribution. v0.3 moves direct-origin invalidation forward with Redis/Valkey server-assisted tracking and fail-safe behavior. Mesh, an Operator, and a hosted control plane are later hypotheses that require evidence from real users rather than version promises.
 
 Gossip does not provide write consensus. Slizen remains a cache layer.
 

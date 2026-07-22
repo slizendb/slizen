@@ -76,4 +76,4 @@ export SLIZEN_KEY_HASH_SECRET='value-loaded-by-your-secret-manager'
 ```
 
 `cache.negative_ttl` is reserved for a later release and must remain `0s`.
-Slizen does not perform negative caching in v0.2.1.
+Slizen does not perform negative caching in v0.2.2.

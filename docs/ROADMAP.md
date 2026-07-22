@@ -60,7 +60,7 @@ Release gate: safe defaults and bounded failure behavior survive unit, race, int
 
 ## v0.2.2: Proxy tax reduction and benchmark attribution
 
-Status: implemented and locally validated on 2026-07-22; unreleased.
+Status: release candidate complete on 2026-07-22; tag, image, and immutable evidence publication remain. Until those artifacts are verified, v0.2.1 remains the latest released developer preview.
 
 - [x] Pipeline upstream `GET` and `PTTL` into one round trip without weakening error semantics.
 - [x] Remove miss-only timeout allocation and redundant tracker/cache-stat locking from verified local GET hits.
@@ -70,7 +70,8 @@ Status: implemented and locally validated on 2026-07-22; unreleased.
 - [x] Remove redundant final-window boundary delay once a key's current count guarantees promotion without weakening EWMA or consecutive-window hysteresis.
 - [x] Correct the cache-hit microbenchmark, add a concurrent dispatch benchmark, and record a repeated before/after allocation baseline.
 - [x] Attribute workload read, write, and final-validation latency separately while preserving the backward-compatible aggregate distribution.
-- [x] Pass the complete Go, Docker, Kubernetes, and request-bound workload release gate from the intended clean commit before tagging.
+- [ ] Pass the complete Go, Docker, Kubernetes, and request-bound workload release gate from the intended clean commit before tagging.
+- [ ] Publish and verify the `v0.2.2` tag, GitHub Release, GHCR digest, provenance, and attached immutable-image evidence.
 
 Release gate: the complete v0.2.1 safety contract remains green, the fixed-size workload evidence proves its sample accounting, and proxy-overhead claims are backed by repeated benchmarks with explicit scope.
 

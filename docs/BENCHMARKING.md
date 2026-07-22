@@ -3,7 +3,7 @@
 Slizen ships two local benchmark paths:
 
 - `benchmark hotkey` is the v0.1 single-key demo and remains available for existing scripts.
-- `benchmark workload` is the v0.2 release workload harness for uniform, skewed, and moving-hot-key traffic, with key-and-write-version value verification in v0.2.1.
+- `benchmark workload` is the v0.2 release workload harness for uniform, skewed, and moving-hot-key traffic, with key-and-write-version value verification from v0.2.1 and request-limit plus phase-latency attribution in v0.2.2.
 
 Both paths produce local evidence for a specific machine and configuration. They are not scientific benchmarks or universal production capacity claims.
 

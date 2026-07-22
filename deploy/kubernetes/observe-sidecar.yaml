@@ -128,7 +128,7 @@ spec:
             runAsNonRoot: true
             runAsUser: 999
         - name: slizen
-          image: ghcr.io/slizendb/slizen:0.2.1
+          image: ghcr.io/slizendb/slizen:0.2.2
           imagePullPolicy: IfNotPresent
           args:
             - --config
