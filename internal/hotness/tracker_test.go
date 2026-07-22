@@ -127,6 +127,41 @@ func TestTrackingEvictionReturnsHotDemotion(t *testing.T) {
 	}
 }
 
+func TestObserveWithStateReturnsCurrentStateAndTelemetry(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	tracker := New(Config{
+		Window: time.Second, EWMAAlpha: 1, PromotionThreshold: 1,
+		DemotionThreshold: 0.1, MinimumHotWindows: 1,
+		Cooldown: time.Second, MaxTrackedKeys: 1, Clock: clock,
+	})
+
+	first := tracker.ObserveWithState("first")
+	if first.State != StateCold || first.Hot != 0 || first.OversizedObservationsDropped != 0 {
+		t.Fatalf("first observation = %+v, want cold state and zero telemetry", first)
+	}
+	clock.Advance(time.Second)
+	promoted := tracker.ObserveWithState("first")
+	if promoted.State != StateHot || promoted.Hot != 1 {
+		t.Fatalf("promoted observation = %+v, want hot state and one hot key", promoted)
+	}
+	if len(promoted.Transitions) != 1 || promoted.Transitions[0].To != StateHot {
+		t.Fatalf("promotion transitions = %+v", promoted.Transitions)
+	}
+
+	replacement := tracker.ObserveWithState("replacement")
+	if replacement.State != StateCold || replacement.Hot != 0 {
+		t.Fatalf("replacement observation = %+v, want cold state and zero hot keys", replacement)
+	}
+	if len(replacement.Transitions) != 1 || replacement.Transitions[0] != (Transition{Key: "first", From: StateHot, To: StateCold}) {
+		t.Fatalf("replacement transitions = %+v", replacement.Transitions)
+	}
+
+	oversized := tracker.ObserveWithState(strings.Repeat("k", MaxTrackedKeyBytes+1))
+	if oversized.State != "" || oversized.Hot != 0 || !oversized.OversizedObservationDropped || oversized.OversizedObservationsDropped != 1 {
+		t.Fatalf("oversized observation = %+v, want untracked state and one drop", oversized)
+	}
+}
+
 func TestStatsHotCountTracksPromotionDemotionAndEviction(t *testing.T) {
 	clock := testutil.NewFakeClock(time.Unix(0, 0))
 	tracker := New(Config{

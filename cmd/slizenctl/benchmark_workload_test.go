@@ -256,7 +256,16 @@ func TestWorkloadBenchmarkJSONContainsReleaseEvidence(t *testing.T) {
 	result := workloadBenchmarkResult{
 		RuntimeVersions: runtimeVersions{Slizen: "0.2.0", Origin: "valkey 8.1.0", Go: "go1.26"},
 		Scenarios: []workloadScenarioResult{{
-			Name:                      workloadScenarioUniform,
+			Name: workloadScenarioUniform,
+			Slizen: benchmarkPhase{
+				OperationAttempts:        100,
+				TerminationReason:        "request_limit",
+				ReadLatency:              &latencyDistribution{Samples: 95},
+				WriteLatency:             &latencyDistribution{Samples: 5},
+				ReadOrderingWaitLatency:  &latencyDistribution{Samples: 95},
+				WriteOrderingWaitLatency: &latencyDistribution{Samples: 5},
+				FinalValidationLatency:   &latencyDistribution{Samples: 4},
+			},
 			P50Milliseconds:           1,
 			P95Milliseconds:           2,
 			P99Milliseconds:           3,
@@ -280,10 +289,64 @@ func TestWorkloadBenchmarkJSONContainsReleaseEvidence(t *testing.T) {
 		`"value_mismatches"`,
 		`"validation_reads"`,
 		`"validation_mismatches"`,
+		`"operation_attempts"`,
+		`"termination_reason"`,
+		`"read_latency"`,
+		`"write_latency"`,
+		`"read_ordering_wait_latency"`,
+		`"write_ordering_wait_latency"`,
+		`"final_validation_latency"`,
+		`"samples"`,
 	} {
 		if !strings.Contains(string(data), field) {
 			t.Fatalf("JSON missing %s: %s", field, data)
 		}
+	}
+}
+
+func TestHotKeyBenchmarkJSONOmitsWorkloadLatencyObjects(t *testing.T) {
+	data, err := json.Marshal(benchmarkResult{
+		Phases: []benchmarkPhase{{Name: "slizen hot", Requests: 10, P99Milliseconds: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Phases []map[string]json.RawMessage `json:"phases"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Phases) != 1 {
+		t.Fatalf("decoded phases = %d, want 1", len(decoded.Phases))
+	}
+	for _, field := range []string{
+		"read_latency",
+		"write_latency",
+		"read_ordering_wait_latency",
+		"write_ordering_wait_latency",
+		"final_validation_latency",
+	} {
+		if _, exists := decoded.Phases[0][field]; exists {
+			t.Fatalf("hot-key phase unexpectedly contains %q: %s", field, data)
+		}
+	}
+}
+
+func TestWorkloadLatencyDistributionsAndTerminationReason(t *testing.T) {
+	values := []time.Duration{100 * time.Millisecond, 10 * time.Millisecond, 50 * time.Millisecond}
+	distribution := latencyDistributionFor(values)
+	if distribution.Samples != 3 || distribution.P50Milliseconds != 50 || distribution.P95Milliseconds != 100 || distribution.P99Milliseconds != 100 {
+		t.Fatalf("latency distribution = %+v", distribution)
+	}
+	if got := workloadTerminationReason(100, 100); got != "request_limit" {
+		t.Fatalf("request-bound reason = %q", got)
+	}
+	if got := workloadTerminationReason(99, 100); got != "duration_limit" {
+		t.Fatalf("duration-bound reason = %q", got)
+	}
+	if got := latencyDistributionPointer(nil); got != nil {
+		t.Fatalf("empty latency distribution = %+v, want nil", got)
 	}
 }
 

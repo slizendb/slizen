@@ -58,6 +58,20 @@ Release closure:
 
 Release gate: safe defaults and bounded failure behavior survive unit, race, integration, Docker, Kubernetes, and workload validation, and every public evidence artifact resolves to one full commit and immutable image digest.
 
+## v0.2.2: Proxy tax reduction and benchmark attribution
+
+Status: implemented and locally validated on 2026-07-22; unreleased.
+
+- [x] Pipeline upstream `GET` and `PTTL` into one round trip without weakening error semantics.
+- [x] Remove miss-only timeout allocation and redundant tracker/cache-stat locking from verified local GET hits.
+- [x] Add a dedicated GET dispatch fast path and pre-bind fixed Prometheus metric children.
+- [x] Keep proxy drain socket deadline calls outside the global drain mutex without losing shutdown accounting.
+- [x] Correct the cache-hit microbenchmark, add a concurrent dispatch benchmark, and record a repeated before/after allocation baseline.
+- [x] Attribute workload read, write, and final-validation latency separately while preserving the backward-compatible aggregate distribution.
+- [x] Pass the complete Go, Docker, Kubernetes, and request-bound workload release gate from the intended clean commit before tagging.
+
+Release gate: the complete v0.2.1 safety contract remains green, the fixed-size workload evidence proves its sample accounting, and proxy-overhead claims are backed by repeated benchmarks with explicit scope.
+
 ## v0.3: Direct-origin invalidation safety
 
 Status: planned.

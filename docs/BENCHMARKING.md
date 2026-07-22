@@ -42,7 +42,7 @@ go run ./cmd/slizenctl benchmark workload \
 
 Select one scenario with `--scenario uniform`, `--scenario skew-80-20`, `--scenario skew-99-1`, or `--scenario moving-flash`. Use `--output json` to write JSON to stdout; `--json-file` writes the same structured result independently of stdout format.
 
-`--duration` and `--requests` are both issuance limits for the generated operations in each measured phase. The harness stops issuing at either limit, lets already-issued operations finish under the client's bounded network timeouts, then performs one final validation GET for every key successfully written during that phase. The reported request count therefore can exceed `--requests` only by the final validation reads. `--read-ratio 95` means approximately 95 percent GET and 5 percent SET operations. `--read-ratio 100` produces a read-only workload and needs no final write validation.
+`--duration` and `--requests` are both issuance limits for the generated operations in each measured phase. The harness stops issuing at either limit, lets already-issued operations finish under the client's bounded network timeouts, then performs one final validation GET for every key successfully written during that phase. Each phase records `operation_attempts` for generated GET/SET operations and a `termination_reason` of `request_limit` or `duration_limit`; final validation is outside both issuance limits. The backward-compatible `requests` and `reads` totals include successful final-validation GETs, so `requests` can exceed `--requests` only by those reads. `--read-ratio 95` means approximately 95 percent GET and 5 percent SET operations. `--read-ratio 100` produces a read-only workload and needs no final write validation.
 
 For `moving-flash` and `all`, `--flash-every` must be smaller than `--requests`; otherwise the advertised hot key could never move. A duration-limited run may still finish before a move, so choose limits that let at least `--flash-every + 1` operations complete.
 
@@ -61,7 +61,7 @@ These are controlled workload shapes, not claims that every real traffic distrib
 
 The seed and zero-based operation index determine the operation type and selected key. Selection does not depend on goroutine scheduling, and the same seed and configuration produce the same operation sequence prefix. `isolated_key_prefix` is intentionally different for each invocation; it isolates disposable cache/hotness state and does not change the index distribution.
 
-Wall-clock duration can still change how much of that prefix completes. For closer comparisons, keep the machine idle, reuse the same runtime configuration, and set `--requests` low enough that both phases reach the request limit before `--duration`.
+Wall-clock duration can still change how much of that prefix completes. For closer comparisons, keep the machine idle, reuse the same runtime configuration, set `--requests` low enough that both phases reach the request limit before `--duration`, and confirm that every compared phase reports `termination_reason: "request_limit"`.
 
 ### Measurement method
 
@@ -78,8 +78,11 @@ Operations for the same key are ordered by the harness: GETs may remain concurre
 
 The JSON result includes:
 
-- p50, p95, and p99 client-observed latency for successful operations;
+- backward-compatible aggregate p50, p95, and p99 end-to-end harness latency for all successful generated GETs, generated SETs, and final-validation GETs; generated operations include time waiting for the per-key ordering lock;
+- `read_latency` and `write_latency` for the Redis command after per-key ordering has been acquired, plus `read_ordering_wait_latency` and `write_ordering_wait_latency` for the lock wait itself; each object has its own successful sample count and p50/p95/p99 distribution;
+- `final_validation_latency` for final-validation GET commands, which do not use the per-key ordering lock;
 - successful reads and writes, failures, elapsed time, and operations per second for each phase;
+- generated `operation_attempts` and `termination_reason`, which distinguish request-bound from duration-bound phases;
 - `value_mismatches` for successful GET responses that did not match the expected key and write generation;
 - `validation_reads`, `validation_failures`, and `validation_mismatches` for the final post-write generation check;
 - origin GET reduction normalized per successful GET;
@@ -91,7 +94,7 @@ The origin version is read with `INFO server`. If the origin ACL denies that com
 
 `origin_get_reduction_percent` can be negative if a valid run observes more origin GETs per successful read through Slizen than in the direct phase. `proved_origin_get_reduction` is true only when the measured proxy phase has cache hits, a positive reduction, no failed operations, zero value mismatches, monotonic daemon identity/counters, and an exact process-global request delta. Any stale-generation, cross-key, truncated, or corrupted GET payload invalidates the evidence instead of being counted as success. Any unrelated traffic through the same Slizen process also invalidates the reduction evidence instead of being silently attributed to the benchmark. A zero or false result is valid evidence, especially for uniform, write-heavy, short, or `observe`-mode runs.
 
-Latency percentiles combine successful GET and SET operations according to the configured ratio. Compare runs only when value size, ratio, concurrency, limits, scenario, seed, Slizen configuration, and runtime environment match.
+The top-level phase and scenario p50/p95/p99 fields remain mixed end-to-end aggregate distributions for schema compatibility. Use the command and ordering-wait objects to distinguish Redis round-trip time from harness serialization. Slizen read command latency still combines cache hits and misses: `/v1/status` provides phase-wide hit and miss counter deltas, not a per-request cache outcome that can be joined safely to individual latency samples. A latency object is omitted when its operation class has no successful samples; this keeps the workload-only objects out of `benchmark hotkey` JSON. Compare runs only when value size, ratio, concurrency, limits, termination reason, scenario, seed, Slizen configuration, and runtime environment match.
 
 ### Resource bounds
 
@@ -144,7 +147,7 @@ The intended signal is narrower: under a repeated, read-heavy skew, determine wh
 
 ## Release evidence
 
-`make release-check` validates tagged source with 1,000 keys, concurrency 32, 10 seconds per phase, and one million operations as the secondary cap. It requires all four scenarios to have zero failures and zero `value_mismatches`; the stable 99/1 scenario must also prove positive origin GET reduction with real cache hits. These are correctness and reproducibility gates, not pass/fail latency or capacity thresholds.
+`make release-check` validates tagged source with 1,000 keys, concurrency 32, a fixed cap of 100,000 generated operations per phase, and a 30-second safety duration. The 20,000-operation moving-flash interval yields five deterministic flash windows when the cap is reached. Release evidence requires the exact `uniform`, `skew-80-20`, `skew-99-1`, and `moving-flash` scenario set. Every origin and Slizen phase must report exactly 100,000 `operation_attempts`, `termination_reason: "request_limit"`, command-latency samples matching those attempts, final-validation samples matching `validation_reads`, and total `requests` matching attempts plus validation reads. An unexpectedly slow or internally inconsistent phase fails the reproducibility gate explicitly. It also requires all four scenarios to have zero failures and zero `value_mismatches`; the stable 99/1 scenario must prove positive origin GET reduction with real cache hits. These are correctness and reproducibility gates, not pass/fail latency or capacity thresholds.
 
 After a tag passes validation, the release workflow publishes the multi-architecture image, records GitHub-native provenance, and runs `scripts/release_evidence.sh` against the exact `ghcr.io/slizendb/slizen@sha256:...` image. The resulting manifest binds the image digest, full commit, version, workload JSON, demo report, and SHA-256 checksums.
 

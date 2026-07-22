@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Redis-backed GET misses fetch the value and its remaining TTL in one pipelined round trip while preserving missing-key, cancellation, and transport-error semantics.
+- The verified local-cache GET path avoids miss-only timeout allocation, redundant hotness/cache-stat locks, generic command parsing, and repeated Prometheus label lookup.
+- Proxy drain deadline syscalls no longer hold the global drain mutex; a second draining-state check preserves shutdown accounting when draining starts concurrently.
+- Workload evidence attributes read, write, and final-validation latency separately and records whether a phase stopped at its request or duration limit.
+
+### Performance
+
+- On Apple M5 with Go 1.26.5, the corrected handler-level cache-hit benchmark median fell from 488.0 ns/op to 159.2 ns/op; the concurrent dispatch median fell from 918.8 ns/op to 531.6 ns/op. Allocations fell from 320 B and 8 allocations per operation to 16 B and 2 allocations per operation. These are local microbenchmark results, not production capacity claims.
+- Across three local Docker hot-key repeats, warm Slizen p99 had a 0.095 ms median tax over direct Valkey while serving 100% cache hits with zero origin GETs. Across three complete request-bound gates, the mixed 99/1 workload reduced origin GETs by 71.4–79.2% with a 0.23–0.52 ms read-p99 tax. These measurements describe this machine and workload only.
+
 ## v0.2.1 - 2026-07-22 - Launch Hardening
 
 ### Added

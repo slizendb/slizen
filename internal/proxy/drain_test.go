@@ -2,10 +2,30 @@ package proxy
 
 import (
 	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
 )
+
+type blockingDeadlineConn struct {
+	readStarted chan struct{}
+	releaseRead chan struct{}
+}
+
+func (c *blockingDeadlineConn) Read([]byte) (int, error)         { return 0, io.EOF }
+func (c *blockingDeadlineConn) Write(p []byte) (int, error)      { return len(p), nil }
+func (c *blockingDeadlineConn) Close() error                     { return nil }
+func (c *blockingDeadlineConn) LocalAddr() net.Addr              { return nil }
+func (c *blockingDeadlineConn) RemoteAddr() net.Addr             { return nil }
+func (c *blockingDeadlineConn) SetDeadline(time.Time) error      { return nil }
+func (c *blockingDeadlineConn) SetWriteDeadline(time.Time) error { return nil }
+
+func (c *blockingDeadlineConn) SetReadDeadline(time.Time) error {
+	close(c.readStarted)
+	<-c.releaseRead
+	return nil
+}
 
 func TestDrainDeadlineUnblocksBlockedConnectionWrite(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
@@ -105,6 +125,51 @@ func TestNormalResponseWriteDeadlineUnblocksNonReadingClient(t *testing.T) {
 		t.Fatal("proxy.write_timeout did not unblock the response write")
 	}
 	tracker.connectionClosed(serverConn)
+}
+
+func TestPrepareHandlerDoneDoesNotBlockDrainWhileSettingDeadlines(t *testing.T) {
+	tracker := newDrainTracker()
+	if !tracker.beginHandler() {
+		t.Fatal("handler admission unexpectedly closed")
+	}
+	conn := &blockingDeadlineConn{
+		readStarted: make(chan struct{}),
+		releaseRead: make(chan struct{}),
+	}
+	type completion struct {
+		draining bool
+		err      error
+	}
+	completed := make(chan completion, 1)
+	go func() {
+		draining, err := tracker.prepareHandlerDone(conn, time.Hour, time.Hour)
+		completed <- completion{draining: draining, err: err}
+	}()
+	<-conn.readStarted
+
+	drainStarted := make(chan struct{})
+	var drained <-chan struct{}
+	go func() {
+		var active, connections int
+		drained, active, connections, _ = tracker.beginDrain(time.Now().Add(time.Second))
+		if active != 1 || connections != 0 {
+			t.Errorf("drain snapshot = active %d, connections %d; want 1, 0", active, connections)
+		}
+		close(drainStarted)
+	}()
+	select {
+	case <-drainStarted:
+	case <-time.After(time.Second):
+		t.Fatal("drain waited for a connection deadline call under the global mutex")
+	}
+
+	close(conn.releaseRead)
+	result := <-completed
+	if !result.draining || result.err != nil {
+		t.Fatalf("handler completion = draining %t, error %v; want draining without error", result.draining, result.err)
+	}
+	tracker.completeDrainingHandler()
+	waitClosed(t, drained, "handler that raced with drain")
 }
 
 func TestDrainRejectsConnectionsAtConfiguredLimit(t *testing.T) {

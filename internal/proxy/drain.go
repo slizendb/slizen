@@ -93,16 +93,28 @@ func (d *drainTracker) beginHandler() bool {
 // its goroutine closes the connection.
 func (d *drainTracker) prepareHandlerDone(conn net.Conn, readTimeout, writeTimeout time.Duration) (draining bool, deadlineErr error) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.draining {
+		d.mu.Unlock()
 		return true, nil
 	}
+	d.mu.Unlock()
+
 	if conn != nil {
 		now := time.Now()
 		deadlineErr = errors.Join(
 			conn.SetReadDeadline(now.Add(readTimeout)),
 			conn.SetWriteDeadline(now.Add(writeTimeout)),
 		)
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// A drain may have started while the connection deadlines were being set.
+	// Keep the handler accounted for in that case; finishHandler will close the
+	// connection and call completeDrainingHandler. Closing the connection also
+	// makes any normal deadline that raced with the drain harmless.
+	if d.draining {
+		return true, deadlineErr
 	}
 	d.active--
 	return false, deadlineErr

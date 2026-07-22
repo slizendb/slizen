@@ -59,6 +59,9 @@ trap cleanup EXIT
 
 workload_result="${TMP_DIR}/slizen-workload-result.json"
 workload_prefix="product:slizen:release:v${SLIZEN_VERSION}"
+release_workload_requests=100000
+release_workload_duration=30s
+release_workload_flash_every=20000
 
 go run -ldflags "-X github.com/slizendb/slizen/internal/buildinfo.Version=${SLIZEN_VERSION} -X github.com/slizendb/slizen/internal/buildinfo.Commit=${SLIZEN_COMMIT}" ./cmd/slizenctl benchmark workload \
   --proxy "${PROXY_ADDR}" \
@@ -70,17 +73,19 @@ go run -ldflags "-X github.com/slizendb/slizen/internal/buildinfo.Version=${SLIZ
   --value-size 128 \
   --read-ratio 95 \
   --concurrency 32 \
-  --duration 10s \
-  --requests 1000000 \
+  --duration "${release_workload_duration}" \
+  --requests "${release_workload_requests}" \
   --seed 42 \
-  --flash-every 40000 \
+  --flash-every "${release_workload_flash_every}" \
   --output text \
   --json-file "${workload_result}"
 
 jq -e \
   --arg prefix "${workload_prefix}" \
   --arg version "${SLIZEN_VERSION}" \
-  --arg commit "${SLIZEN_COMMIT}" '
+  --arg commit "${SLIZEN_COMMIT}" \
+  --argjson request_limit "${release_workload_requests}" \
+  --argjson flash_every "${release_workload_flash_every}" '
   .name == "Slizen Release Workload Benchmark"
   and .scenario_selection == "all"
   and .key_prefix == $prefix
@@ -88,9 +93,26 @@ jq -e \
   and .runtime_versions.slizen == $version
   and .runtime_versions.slizen_commit == $commit
   and .runtime_versions.slizenctl == ($version + " (" + $commit + ")")
-  and (.scenarios | length == 4)
+  and .max_requests_per_phase == $request_limit
+  and .flash_key_moves_every_operations == $flash_every
+  and (.scenarios | type == "array" and length == 4)
+  and ((.scenarios | map(.name) | sort) == ["moving-flash", "skew-80-20", "skew-99-1", "uniform"])
   and all(.scenarios[];
     .evidence_valid == true
+    and .origin.operation_attempts == $request_limit
+    and .origin.termination_reason == "request_limit"
+    and (.origin.read_latency.samples + .origin.write_latency.samples) == .origin.operation_attempts
+    and .origin.read_ordering_wait_latency.samples == .origin.read_latency.samples
+    and .origin.write_ordering_wait_latency.samples == .origin.write_latency.samples
+    and .origin.final_validation_latency.samples == .origin.validation_reads
+    and .origin.requests == (.origin.operation_attempts + .origin.validation_reads)
+    and .slizen.operation_attempts == $request_limit
+    and .slizen.termination_reason == "request_limit"
+    and (.slizen.read_latency.samples + .slizen.write_latency.samples) == .slizen.operation_attempts
+    and .slizen.read_ordering_wait_latency.samples == .slizen.read_latency.samples
+    and .slizen.write_ordering_wait_latency.samples == .slizen.write_latency.samples
+    and .slizen.final_validation_latency.samples == .slizen.validation_reads
+    and .slizen.requests == (.slizen.operation_attempts + .slizen.validation_reads)
     and .origin.value_mismatches == 0
     and .slizen.value_mismatches == 0
     and .origin.validation_failures == 0

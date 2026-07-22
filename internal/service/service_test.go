@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/slizendb/slizen/internal/config"
+	"github.com/slizendb/slizen/internal/hotness"
 	"github.com/slizendb/slizen/internal/metrics"
 	"github.com/slizendb/slizen/internal/testutil"
 	"github.com/slizendb/slizen/internal/upstream"
@@ -141,6 +143,17 @@ func promoteAndCache(t *testing.T, svc *Service, clock *testutil.FakeClock, key 
 	}
 }
 
+func scrapeMetrics(t *testing.T, svc *Service) string {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest("GET", "/metrics", nil)
+	svc.metrics.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != 200 {
+		t.Fatalf("metrics status = %d, want 200", recorder.Code)
+	}
+	return recorder.Body.String()
+}
+
 func TestGETMissThenPromotedHit(t *testing.T) {
 	clock := testutil.NewFakeClock(time.Unix(0, 0))
 	up := testutil.NewFakeUpstream()
@@ -160,6 +173,79 @@ func TestGETMissThenPromotedHit(t *testing.T) {
 	}
 	if calls := up.GetCallCount("k"); calls != 2 {
 		t.Fatalf("expected local cache hit without upstream call, got %d", calls)
+	}
+}
+
+func TestGETFreshHitSkipsSlowPathContextAndCacheObservation(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	up := testutil.NewFakeUpstream()
+	up.Put("k", []byte("value"), 0)
+	svc := newTestService(up, clock)
+	promoteAndCache(t, svc, clock, "k")
+
+	// A fresh hit does not change these aggregates. Seed conspicuous values so
+	// the test detects an unnecessary cache observation on the hit path.
+	svc.metrics.ObserveCache(99, 123, 0)
+	contextObserved := make(chan struct{})
+	ctx := &observedDoneContext{Context: context.Background(), observed: contextObserved}
+	value, err := svc.Get(ctx, "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !value.Exists || string(value.Data) != "value" {
+		t.Fatalf("fresh hit = %+v, want cached value", value)
+	}
+	select {
+	case <-contextObserved:
+		t.Fatal("fresh hit derived a slow-path cancellation context")
+	default:
+	}
+
+	metricsBody := scrapeMetrics(t, svc)
+	for _, want := range []string{
+		"slizen_cache_entries 99",
+		"slizen_cache_bytes 123",
+		"slizen_hot_keys 1",
+	} {
+		if !strings.Contains(metricsBody, want) {
+			t.Fatalf("metrics missing %q:\n%s", want, metricsBody)
+		}
+	}
+}
+
+func TestGETObservationUpdatesHotnessMetrics(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	up := testutil.NewFakeUpstream()
+	up.Put("k", []byte("value"), 0)
+	svc := newTestServiceWithConfig(up, clock, func(cfg *config.Config) {
+		cfg.Mode = "observe"
+	})
+
+	if _, err := svc.Get(context.Background(), "k"); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(time.Second)
+	if _, err := svc.Get(context.Background(), "k"); err != nil {
+		t.Fatal(err)
+	}
+	if body := scrapeMetrics(t, svc); !strings.Contains(body, "slizen_hot_keys 1") {
+		t.Fatalf("promotion did not update hot-key gauge:\n%s", body)
+	}
+
+	oversized := strings.Repeat("k", hotness.MaxTrackedKeyBytes+1)
+	if _, err := svc.Get(context.Background(), oversized); err != nil {
+		t.Fatal(err)
+	}
+	if body := scrapeMetrics(t, svc); !strings.Contains(body, "slizen_hotness_oversized_observations_dropped_total 1") {
+		t.Fatalf("oversized observation did not update metric:\n%s", body)
+	}
+
+	clock.Advance(2 * time.Second)
+	if _, err := svc.Get(context.Background(), "k"); err != nil {
+		t.Fatal(err)
+	}
+	if body := scrapeMetrics(t, svc); !strings.Contains(body, "slizen_hot_keys 0") {
+		t.Fatalf("demotion did not update hot-key gauge:\n%s", body)
 	}
 }
 

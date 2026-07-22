@@ -74,6 +74,16 @@ type View struct {
 	OversizedObservationsDropped uint64
 }
 
+// Observation is the result of observing one key. The key state and aggregate
+// telemetry are captured under the same lock as the observation.
+type Observation struct {
+	Transitions                  []Transition
+	State                        State
+	Hot                          int
+	OversizedObservationDropped  bool
+	OversizedObservationsDropped uint64
+}
+
 func New(cfg Config) *Tracker {
 	if cfg.Clock == nil {
 		cfg.Clock = realClock{}
@@ -100,6 +110,10 @@ func New(cfg Config) *Tracker {
 }
 
 func (t *Tracker) Observe(key string) []Transition {
+	return t.ObserveWithState(key).Transitions
+}
+
+func (t *Tracker) ObserveWithState(key string) Observation {
 	now := t.clock.Now()
 
 	t.mu.Lock()
@@ -110,7 +124,12 @@ func (t *Tracker) Observe(key string) []Transition {
 		if len(key) > MaxTrackedKeyBytes {
 			t.oversizedObservationsDropped++
 		}
-		return transitions
+		return Observation{
+			Transitions:                  transitions,
+			Hot:                          t.hot,
+			OversizedObservationDropped:  len(key) > MaxTrackedKeyBytes,
+			OversizedObservationsDropped: t.oversizedObservationsDropped,
+		}
 	}
 	ent, evictionTransition := t.getOrCreateLocked(key, now)
 	if evictionTransition != nil {
@@ -118,7 +137,12 @@ func (t *Tracker) Observe(key string) []Transition {
 	}
 	ent.count++
 	ent.lastSeen = now
-	return transitions
+	return Observation{
+		Transitions:                  transitions,
+		State:                        ent.state,
+		Hot:                          t.hot,
+		OversizedObservationsDropped: t.oversizedObservationsDropped,
+	}
 }
 
 func (t *Tracker) Advance() []Transition {

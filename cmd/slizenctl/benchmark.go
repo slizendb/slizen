@@ -65,26 +65,40 @@ type benchmarkResult struct {
 }
 
 type benchmarkPhase struct {
-	Name                 string   `json:"name"`
-	Address              string   `json:"address"`
-	Requests             uint64   `json:"requests"`
-	Reads                uint64   `json:"reads,omitempty"`
-	Writes               uint64   `json:"writes,omitempty"`
-	Failures             uint64   `json:"failures"`
-	ValueMismatches      uint64   `json:"value_mismatches"`
-	ValidationReads      uint64   `json:"validation_reads"`
-	ValidationFailures   uint64   `json:"validation_failures"`
-	ValidationMismatches uint64   `json:"validation_mismatches"`
-	ElapsedSeconds       float64  `json:"elapsed_seconds"`
-	OpsPerSecond         float64  `json:"ops_per_second"`
-	P50Milliseconds      float64  `json:"p50_ms"`
-	P95Milliseconds      float64  `json:"p95_ms"`
-	P99Milliseconds      float64  `json:"p99_ms"`
-	UpstreamGETs         uint64   `json:"upstream_gets"`
-	CacheHits            uint64   `json:"cache_hits"`
-	CacheMisses          uint64   `json:"cache_misses"`
-	CacheHitRatio        float64  `json:"cache_hit_ratio_percent"`
-	Notes                []string `json:"notes,omitempty"`
+	Name                     string               `json:"name"`
+	Address                  string               `json:"address"`
+	Requests                 uint64               `json:"requests"`
+	OperationAttempts        uint64               `json:"operation_attempts,omitempty"`
+	TerminationReason        string               `json:"termination_reason,omitempty"`
+	Reads                    uint64               `json:"reads,omitempty"`
+	Writes                   uint64               `json:"writes,omitempty"`
+	Failures                 uint64               `json:"failures"`
+	ValueMismatches          uint64               `json:"value_mismatches"`
+	ValidationReads          uint64               `json:"validation_reads"`
+	ValidationFailures       uint64               `json:"validation_failures"`
+	ValidationMismatches     uint64               `json:"validation_mismatches"`
+	ElapsedSeconds           float64              `json:"elapsed_seconds"`
+	OpsPerSecond             float64              `json:"ops_per_second"`
+	P50Milliseconds          float64              `json:"p50_ms"`
+	P95Milliseconds          float64              `json:"p95_ms"`
+	P99Milliseconds          float64              `json:"p99_ms"`
+	ReadLatency              *latencyDistribution `json:"read_latency,omitempty"`
+	WriteLatency             *latencyDistribution `json:"write_latency,omitempty"`
+	ReadOrderingWaitLatency  *latencyDistribution `json:"read_ordering_wait_latency,omitempty"`
+	WriteOrderingWaitLatency *latencyDistribution `json:"write_ordering_wait_latency,omitempty"`
+	FinalValidationLatency   *latencyDistribution `json:"final_validation_latency,omitempty"`
+	UpstreamGETs             uint64               `json:"upstream_gets"`
+	CacheHits                uint64               `json:"cache_hits"`
+	CacheMisses              uint64               `json:"cache_misses"`
+	CacheHitRatio            float64              `json:"cache_hit_ratio_percent"`
+	Notes                    []string             `json:"notes,omitempty"`
+}
+
+type latencyDistribution struct {
+	Samples         uint64  `json:"samples"`
+	P50Milliseconds float64 `json:"p50_ms"`
+	P95Milliseconds float64 `json:"p95_ms"`
+	P99Milliseconds float64 `json:"p99_ms"`
 }
 
 type runtimeVersions struct {
@@ -152,11 +166,15 @@ type workloadScenarioResult struct {
 }
 
 type workloadWorkerResult struct {
-	latencies       []time.Duration
-	reads           uint64
-	writes          uint64
-	failures        uint64
-	valueMismatches uint64
+	latencies          []time.Duration
+	readLatencies      []time.Duration
+	writeLatencies     []time.Duration
+	readOrderingWaits  []time.Duration
+	writeOrderingWaits []time.Duration
+	reads              uint64
+	writes             uint64
+	failures           uint64
+	valueMismatches    uint64
 }
 
 type workloadValues struct {
@@ -475,6 +493,10 @@ func runWorkloadBenchmark(cfg workloadConfig) (workloadBenchmarkResult, error) {
 			"results describe this run and configuration only; they are not universal capacity or latency claims",
 			"isolated_key_prefix is unique to this invocation so cache and adaptive hotness state start clean for every repeated run",
 			"successful GETs are checked against deterministic key-and-write-version payloads; per-key ordering and final validation make stale-after-write responses invalidate the evidence",
+			"aggregate p50_ms/p95_ms/p99_ms preserve end-to-end harness latency for successful measured reads, writes, and final-validation reads, including per-key ordering wait for generated operations",
+			"read_latency and write_latency measure the Redis command after per-key ordering is acquired; read_ordering_wait_latency and write_ordering_wait_latency report that wait separately; final_validation_latency has no ordering wait",
+			"read_latency combines cache hits and misses because process-global status counters cannot attribute an individual latency sample to a cache outcome",
+			"termination_reason identifies whether measured operation issuance reached the request or duration limit; final validation runs afterward",
 		},
 	}
 	if versionErr != nil {
@@ -650,19 +672,28 @@ func runRedisWorkloadWithClients(name, addr string, clients []*redis.Client, key
 				keyIndex, read := workloadRequestAt(scenario, cfg, operationIndex)
 				requestStart := time.Now()
 				var err error
+				var commandElapsed time.Duration
+				var orderingWait time.Duration
 				valueMismatch := false
 				state := &keyStates[keyIndex]
 				if read {
 					state.mu.RLock()
+					orderingWait = time.Since(requestStart)
 					expectedVersion := state.version
 					var value []byte
+					commandStart := time.Now()
 					value, err = client.Get(operationCtx, keys[keyIndex]).Bytes()
+					commandElapsed = time.Since(commandStart)
 					valueMismatch = err == nil && !values.Matches(keyIndex, expectedVersion, value)
 					state.mu.RUnlock()
 				} else {
 					state.mu.Lock()
+					orderingWait = time.Since(requestStart)
 					nextVersion := state.version + 1
-					err = client.Set(operationCtx, keys[keyIndex], values.Fill(keyIndex, nextVersion, valueBuffer), 0).Err()
+					value := values.Fill(keyIndex, nextVersion, valueBuffer)
+					commandStart := time.Now()
+					err = client.Set(operationCtx, keys[keyIndex], value, 0).Err()
+					commandElapsed = time.Since(commandStart)
 					if err == nil {
 						state.version = nextVersion
 					}
@@ -678,8 +709,12 @@ func runRedisWorkloadWithClients(name, addr string, clients []*redis.Client, key
 				}
 				worker.latencies = append(worker.latencies, elapsed)
 				if read {
+					worker.readLatencies = append(worker.readLatencies, commandElapsed)
+					worker.readOrderingWaits = append(worker.readOrderingWaits, orderingWait)
 					worker.reads++
 				} else {
+					worker.writeLatencies = append(worker.writeLatencies, commandElapsed)
+					worker.writeOrderingWaits = append(worker.writeOrderingWaits, orderingWait)
 					worker.writes++
 				}
 			}
@@ -692,37 +727,59 @@ func runRedisWorkloadWithClients(name, addr string, clients []*redis.Client, key
 	}
 	elapsed := time.Since(start)
 
-	latencies := make([]time.Duration, 0, minInt(cfg.MaxRequests, int(issued.Load())))
-	var reads, writes, failures, valueMismatches uint64
+	var reads, writes, operationFailures, valueMismatches uint64
 	for _, worker := range workers {
-		latencies = append(latencies, worker.latencies...)
 		reads += worker.reads
 		writes += worker.writes
-		failures += worker.failures
+		operationFailures += worker.failures
 		valueMismatches += worker.valueMismatches
 	}
+	latencies := make([]time.Duration, 0, reads+writes+validation.reads)
+	readLatencies := make([]time.Duration, 0, reads)
+	writeLatencies := make([]time.Duration, 0, writes)
+	readOrderingWaits := make([]time.Duration, 0, reads)
+	writeOrderingWaits := make([]time.Duration, 0, writes)
+	for _, worker := range workers {
+		latencies = append(latencies, worker.latencies...)
+		readLatencies = append(readLatencies, worker.readLatencies...)
+		writeLatencies = append(writeLatencies, worker.writeLatencies...)
+		readOrderingWaits = append(readOrderingWaits, worker.readOrderingWaits...)
+		writeOrderingWaits = append(writeOrderingWaits, worker.writeOrderingWaits...)
+	}
+	validationLatencies := validation.readLatencies
 	latencies = append(latencies, validation.latencies...)
+	operationAttempts := reads + writes + operationFailures
+	terminationReason := workloadTerminationReason(operationAttempts, cfg.MaxRequests)
+	failures := operationFailures
 	reads += validation.reads
 	failures += validation.failures
 	valueMismatches += validation.valueMismatches
-	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 	requests := reads + writes
+	aggregateLatency := latencyDistributionFor(latencies)
 	phase := benchmarkPhase{
-		Name:                 name,
-		Address:              addr,
-		Requests:             requests,
-		Reads:                reads,
-		Writes:               writes,
-		Failures:             failures,
-		ValueMismatches:      valueMismatches,
-		ValidationReads:      validationReads,
-		ValidationFailures:   validation.failures,
-		ValidationMismatches: validation.valueMismatches,
-		ElapsedSeconds:       elapsed.Seconds(),
-		P50Milliseconds:      percentileMillis(latencies, 50),
-		P95Milliseconds:      percentileMillis(latencies, 95),
-		P99Milliseconds:      percentileMillis(latencies, 99),
+		Name:                     name,
+		Address:                  addr,
+		Requests:                 requests,
+		OperationAttempts:        operationAttempts,
+		TerminationReason:        terminationReason,
+		Reads:                    reads,
+		Writes:                   writes,
+		Failures:                 failures,
+		ValueMismatches:          valueMismatches,
+		ValidationReads:          validationReads,
+		ValidationFailures:       validation.failures,
+		ValidationMismatches:     validation.valueMismatches,
+		ElapsedSeconds:           elapsed.Seconds(),
+		P50Milliseconds:          aggregateLatency.P50Milliseconds,
+		P95Milliseconds:          aggregateLatency.P95Milliseconds,
+		P99Milliseconds:          aggregateLatency.P99Milliseconds,
+		ReadLatency:              latencyDistributionPointer(readLatencies),
+		WriteLatency:             latencyDistributionPointer(writeLatencies),
+		ReadOrderingWaitLatency:  latencyDistributionPointer(readOrderingWaits),
+		WriteOrderingWaitLatency: latencyDistributionPointer(writeOrderingWaits),
+		FinalValidationLatency:   latencyDistributionPointer(validationLatencies),
 	}
+	phase.Notes = append(phase.Notes, fmt.Sprintf("measured operation issuance stopped at the %s after %d operations", strings.ReplaceAll(terminationReason, "_", " "), operationAttempts))
 	if validationReads > 0 {
 		phase.Notes = append(phase.Notes, fmt.Sprintf("validated the final write generation for %d keys", validationReads))
 	}
@@ -733,6 +790,13 @@ func runRedisWorkloadWithClients(name, addr string, clients []*redis.Client, key
 		return phase, errors.New("phase completed without a successful operation")
 	}
 	return phase, nil
+}
+
+func workloadTerminationReason(operationAttempts uint64, maxRequests int) string {
+	if operationAttempts >= uint64(maxRequests) {
+		return "request_limit"
+	}
+	return "duration_limit"
 }
 
 func validateWrittenWorkloadValues(clients []*redis.Client, keys []string, values workloadValues, states []workloadKeyState, duration time.Duration) (workloadWorkerResult, uint64, error) {
@@ -791,6 +855,7 @@ func validateWrittenWorkloadValues(clients []*redis.Client, keys []string, value
 					continue
 				}
 				worker.latencies = append(worker.latencies, elapsed)
+				worker.readLatencies = append(worker.readLatencies, elapsed)
 				worker.reads++
 			}
 		}()
@@ -803,6 +868,7 @@ func validateWrittenWorkloadValues(clients []*redis.Client, keys []string, value
 	result := workloadWorkerResult{}
 	for _, worker := range workers {
 		result.latencies = append(result.latencies, worker.latencies...)
+		result.readLatencies = append(result.readLatencies, worker.readLatencies...)
 		result.reads += worker.reads
 		result.failures += worker.failures
 		result.valueMismatches += worker.valueMismatches
@@ -966,9 +1032,14 @@ func printWorkloadBenchmarkText(w io.Writer, result workloadBenchmarkResult) {
 	fmt.Fprintf(w, "Concurrency: %d\n", result.Concurrency)
 	fmt.Fprintf(w, "Runtime: slizen=%s origin=%s go=%s %s/%s\n", result.RuntimeVersions.Slizen, result.RuntimeVersions.Origin, result.RuntimeVersions.Go, result.RuntimeVersions.OperatingOS, result.RuntimeVersions.Arch)
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "%-16s %-13s %10s %9s %9s %8s %8s %8s %13s %11s\n", "Scenario", "Phase", "Ops/sec", "Reads", "Writes", "p50", "p95", "p99", "Origin GETs", "Hit rate")
+	fmt.Fprintf(w, "%-16s %-13s %10s %9s %9s %8s %8s %8s %13s %11s\n", "Scenario", "Phase", "Ops/sec", "Reads", "Writes", "mix p50", "mix p95", "mix p99", "Origin GETs", "Hit rate")
 	for _, scenario := range result.Scenarios {
 		for _, phase := range []benchmarkPhase{scenario.Origin, scenario.Slizen} {
+			readLatency := latencyDistributionValue(phase.ReadLatency)
+			writeLatency := latencyDistributionValue(phase.WriteLatency)
+			readOrderingWait := latencyDistributionValue(phase.ReadOrderingWaitLatency)
+			writeOrderingWait := latencyDistributionValue(phase.WriteOrderingWaitLatency)
+			validationLatency := latencyDistributionValue(phase.FinalValidationLatency)
 			fmt.Fprintf(w, "%-16s %-13s %10.0f %9d %9d %7.2fms %7.2fms %7.2fms %13d %10.1f%%\n",
 				scenario.Name,
 				phase.Name,
@@ -981,6 +1052,31 @@ func printWorkloadBenchmarkText(w io.Writer, result workloadBenchmarkResult) {
 				phase.UpstreamGETs,
 				phase.CacheHitRatio,
 			)
+			fmt.Fprintf(w, "    latency p50/p95/p99: read=%d@%.2f/%.2f/%.2fms write=%d@%.2f/%.2f/%.2fms final-validation=%d@%.2f/%.2f/%.2fms\n",
+				readLatency.Samples,
+				readLatency.P50Milliseconds,
+				readLatency.P95Milliseconds,
+				readLatency.P99Milliseconds,
+				writeLatency.Samples,
+				writeLatency.P50Milliseconds,
+				writeLatency.P95Milliseconds,
+				writeLatency.P99Milliseconds,
+				validationLatency.Samples,
+				validationLatency.P50Milliseconds,
+				validationLatency.P95Milliseconds,
+				validationLatency.P99Milliseconds,
+			)
+			fmt.Fprintf(w, "    per-key ordering wait p50/p95/p99: read=%d@%.2f/%.2f/%.2fms write=%d@%.2f/%.2f/%.2fms\n",
+				readOrderingWait.Samples,
+				readOrderingWait.P50Milliseconds,
+				readOrderingWait.P95Milliseconds,
+				readOrderingWait.P99Milliseconds,
+				writeOrderingWait.Samples,
+				writeOrderingWait.P50Milliseconds,
+				writeOrderingWait.P95Milliseconds,
+				writeOrderingWait.P99Milliseconds,
+			)
+			fmt.Fprintf(w, "    issuance: %s after %d operations\n", phase.TerminationReason, phase.OperationAttempts)
 		}
 		fmt.Fprintf(w, "  result: origin_get_reduction=%.1f%% cache_hit_ratio=%.1f%% value_mismatches=%d validation_reads=%d validation_failures=%d validation_mismatches=%d evidence_valid=%t proved=%t\n",
 			scenario.OriginGETReductionPercent,
@@ -1370,6 +1466,31 @@ func percentileMillis(values []time.Duration, percentile int) float64 {
 		index = len(values) - 1
 	}
 	return float64(values[index].Microseconds()) / 1000
+}
+
+func latencyDistributionFor(values []time.Duration) latencyDistribution {
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	return latencyDistribution{
+		Samples:         uint64(len(values)),
+		P50Milliseconds: percentileMillis(values, 50),
+		P95Milliseconds: percentileMillis(values, 95),
+		P99Milliseconds: percentileMillis(values, 99),
+	}
+}
+
+func latencyDistributionPointer(values []time.Duration) *latencyDistribution {
+	if len(values) == 0 {
+		return nil
+	}
+	distribution := latencyDistributionFor(values)
+	return &distribution
+}
+
+func latencyDistributionValue(distribution *latencyDistribution) latencyDistribution {
+	if distribution == nil {
+		return latencyDistribution{}
+	}
+	return *distribution
 }
 
 func subtractUint64(after, before uint64) uint64 {
