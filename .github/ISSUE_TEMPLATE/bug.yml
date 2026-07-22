@@ -11,7 +11,7 @@ body:
     id: version
     attributes:
       label: Slizen version and commit
-      placeholder: "0.2.2 (full commit SHA)"
+      placeholder: "0.2.3 (full commit SHA)"
     validations:
       required: true
   - type: dropdown

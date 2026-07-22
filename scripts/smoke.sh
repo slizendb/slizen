@@ -10,6 +10,8 @@ ADMIN_URL="${ADMIN_URL:-http://127.0.0.1:9090}"
 KEY="${KEY:-product:iphone_17}"
 VALUE="${VALUE:-{\"name\":\"iPhone 17\",\"price\":999}}"
 UPDATED_VALUE="${UPDATED_VALUE:-{\"name\":\"iPhone 17\",\"price\":1000}}"
+ADMISSION_KEY="${ADMISSION_KEY:-product:slizen:two-hit-smoke}"
+ADMISSION_VALUE="${ADMISSION_VALUE:-two-hit-value}"
 
 require() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -39,6 +41,11 @@ valkey_cli() {
   docker compose exec -T valkey valkey-cli -h slizend -p 6380 "$@"
 }
 
+upstream_gets() {
+  curl -fsS "${ADMIN_URL}/metrics" |
+    awk '/slizen_upstream_requests_total\{command="GET"\}/ { print $2; found = 1 } END { if (!found) print 0 }'
+}
+
 require docker
 require curl
 require awk
@@ -62,6 +69,20 @@ valkey_cli SET "${KEY}" "${VALUE}" >/dev/null
 got="$(valkey_cli GET "${KEY}")"
 if [[ "${got}" != "${VALUE}" ]]; then
   echo "unexpected GET value after SET: ${got}" >&2
+  exit 1
+fi
+
+valkey_cli SET "${ADMISSION_KEY}" "${ADMISSION_VALUE}" >/dev/null
+first_admission_get="$(valkey_cli GET "${ADMISSION_KEY}")"
+upstream_after_first_admission_get="$(upstream_gets)"
+second_admission_get="$(valkey_cli GET "${ADMISSION_KEY}")"
+upstream_after_second_admission_get="$(upstream_gets)"
+if [[ "${first_admission_get}" != "${ADMISSION_VALUE}" || "${second_admission_get}" != "${ADMISSION_VALUE}" ]]; then
+  echo "two-hit admission returned an unexpected value" >&2
+  exit 1
+fi
+if [[ "${upstream_after_first_admission_get}" != "${upstream_after_second_admission_get}" ]]; then
+  echo "second admission GET reached the upstream" >&2
   exit 1
 fi
 
@@ -93,7 +114,7 @@ if grep -Eq 'iphone_17|product:iphone|demo-secret' <<<"${audit}"; then
   echo "audit leaked a raw key or secret" >&2
   exit 1
 fi
-if ! grep -q 'slizen.audit.v1' <<<"${audit}" || ! grep -q 'reason_codes' <<<"${audit}" || ! grep -q 'hmac-sha256:' <<<"${audit}" || ! grep -q '"telemetry_complete": true' <<<"${audit}"; then
+if ! grep -q 'slizen.audit.v1' <<<"${audit}" || ! grep -q 'reason_codes' <<<"${audit}" || ! grep -q 'hmac-sha256:' <<<"${audit}" || ! grep -q '"capacity_observations_dropped": 0' <<<"${audit}" || ! grep -q '"telemetry_complete": true' <<<"${audit}"; then
   echo "audit did not contain the expected bounded report fields" >&2
   exit 1
 fi
@@ -107,11 +128,27 @@ awk '/slizen_cache_hits_total\{command="GET"\}/ { if ($2 + 0 > 0) found = 1 } EN
   echo "expected cache hits after demo" >&2
   exit 1
 }
+for reason in policy_bypass not_admitted not_present unclassified; do
+  if ! grep -q "slizen_cache_miss_reasons_total{reason=\"${reason}\"}" <<<"${metrics}"; then
+    echo "missing bounded cache miss reason metric: ${reason}" >&2
+    exit 1
+  fi
+done
+if ! grep -q '^slizen_hotness_capacity_observations_dropped_total ' <<<"${metrics}"; then
+  echo "missing hotness capacity-drop metric" >&2
+  exit 1
+fi
 
+upstream_before_set="$(upstream_gets)"
 valkey_cli SET "${KEY}" "${UPDATED_VALUE}" >/dev/null
 got="$(valkey_cli GET "${KEY}")"
+upstream_after_set_get="$(upstream_gets)"
 if [[ "${got}" != "${UPDATED_VALUE}" ]]; then
-  echo "SET through Slizen did not invalidate cached value: ${got}" >&2
+  echo "SET through Slizen did not refresh the admitted cached value: ${got}" >&2
+  exit 1
+fi
+if [[ "${upstream_before_set}" != "${upstream_after_set_get}" ]]; then
+  echo "GET after exact SET did not use the write-through value" >&2
   exit 1
 fi
 

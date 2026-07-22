@@ -48,6 +48,16 @@ type snapshotReadUpstream struct {
 	release        chan struct{}
 }
 
+type blockedWriteUpstream struct {
+	*testutil.FakeUpstream
+
+	mu      sync.Mutex
+	block   bool
+	started chan struct{}
+	release chan struct{}
+	entered chan []string
+}
+
 type observedDoneContext struct {
 	context.Context
 	once     sync.Once
@@ -56,11 +66,50 @@ type observedDoneContext struct {
 
 func (c *observedDoneContext) Done() <-chan struct{} {
 	c.once.Do(func() { close(c.observed) })
-	return nil
+	return c.Context.Done()
 }
 
 func newSnapshotReadUpstream() *snapshotReadUpstream {
 	return &snapshotReadUpstream{FakeUpstream: testutil.NewFakeUpstream()}
+}
+
+func newBlockedWriteUpstream() *blockedWriteUpstream {
+	return &blockedWriteUpstream{
+		FakeUpstream: testutil.NewFakeUpstream(),
+		entered:      make(chan []string, 16),
+	}
+}
+
+func (u *blockedWriteUpstream) blockNextWrite() (<-chan struct{}, chan struct{}) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.block = true
+	u.started = make(chan struct{})
+	u.release = make(chan struct{})
+	return u.started, u.release
+}
+
+func (u *blockedWriteUpstream) Do(ctx context.Context, args ...string) (any, error) {
+	u.entered <- append([]string(nil), args...)
+	result, err := u.FakeUpstream.Do(ctx, args...)
+
+	u.mu.Lock()
+	if !u.block {
+		u.mu.Unlock()
+		return result, err
+	}
+	started := u.started
+	release := u.release
+	u.block = false
+	u.mu.Unlock()
+
+	close(started)
+	select {
+	case <-release:
+		return result, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (u *snapshotReadUpstream) blockNext(command string) (<-chan struct{}, chan struct{}) {
@@ -176,7 +225,7 @@ func TestGETMissThenPromotedHit(t *testing.T) {
 	}
 }
 
-func TestGETCachesOnGuaranteedPromotion(t *testing.T) {
+func TestGETTwoHitAdmissionPrecedesGuaranteedEWMA(t *testing.T) {
 	clock := testutil.NewFakeClock(time.Unix(0, 0))
 	up := testutil.NewFakeUpstream()
 	up.Put("k", []byte("value"), 0)
@@ -186,9 +235,8 @@ func TestGETCachesOnGuaranteedPromotion(t *testing.T) {
 		cfg.Hotness.MinimumHotWindows = 2
 	})
 
-	// The first two GETs form the required completed hot window. In the next
-	// window, the second GET makes promotion mathematically inevitable and its
-	// upstream response fills the cache immediately.
+	// A later second read admits the probationary value before the configured
+	// EWMA path would have enough completed windows to promote it.
 	for range 2 {
 		if _, err := svc.Get(context.Background(), "k"); err != nil {
 			t.Fatal(err)
@@ -200,8 +248,8 @@ func TestGETCachesOnGuaranteedPromotion(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if calls := up.GetCallCount("k"); calls != 4 {
-		t.Fatalf("upstream GETs through guaranteed promotion = %d, want 4", calls)
+	if calls := up.GetCallCount("k"); calls != 2 {
+		t.Fatalf("upstream GETs through two-hit admission = %d, want 2", calls)
 	}
 	if _, ok := svc.cache.Inspect("k"); !ok {
 		t.Fatal("guaranteed promotion response was not cached")
@@ -214,12 +262,12 @@ func TestGETCachesOnGuaranteedPromotion(t *testing.T) {
 	if !value.Exists || string(value.Data) != "value" {
 		t.Fatalf("cached GET = %+v, want value", value)
 	}
-	if calls := up.GetCallCount("k"); calls != 4 {
+	if calls := up.GetCallCount("k"); calls != 2 {
 		t.Fatalf("GET after guaranteed promotion reached upstream: %d calls", calls)
 	}
 	snapshot := svc.metrics.Snapshot()
-	if snapshot.Promotions != 1 || snapshot.CacheHits != 1 {
-		t.Fatalf("metrics after guaranteed promotion = %+v, want one promotion and one hit", snapshot)
+	if snapshot.Promotions != 1 || snapshot.CacheHits != 3 {
+		t.Fatalf("metrics after two-hit admission = %+v, want one promotion and three hits", snapshot)
 	}
 }
 
@@ -296,7 +344,7 @@ func TestGETObservationUpdatesHotnessMetrics(t *testing.T) {
 	}
 }
 
-func TestHotTrackingEvictionPromptlyDeletesCachedVictim(t *testing.T) {
+func TestHotTrackingCapacityDropPreservesCachedVictim(t *testing.T) {
 	clock := testutil.NewFakeClock(time.Unix(0, 0))
 	up := testutil.NewFakeUpstream()
 	up.Put("victim", []byte("old"), 0)
@@ -312,23 +360,25 @@ func TestHotTrackingEvictionPromptlyDeletesCachedVictim(t *testing.T) {
 	if _, err := svc.Get(context.Background(), "replacement"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := svc.cache.Inspect("victim"); ok {
-		t.Fatal("tracking eviction left a cached victim")
+	if _, ok := svc.cache.Inspect("victim"); !ok {
+		t.Fatal("capacity pressure evicted a protected HOT victim")
 	}
 
-	up.Put("victim", []byte("new"), 0)
 	value, err := svc.Get(context.Background(), "victim")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(value.Data) != "new" {
-		t.Fatalf("GET after tracking eviction = %q, want new upstream value", value.Data)
+	if string(value.Data) != "old" {
+		t.Fatalf("GET after capacity drop = %q, want protected value", value.Data)
 	}
-	if calls := up.GetCallCount("victim"); calls != 3 {
-		t.Fatalf("victim upstream GETs = %d, want 3", calls)
+	if calls := up.GetCallCount("victim"); calls != 2 {
+		t.Fatalf("victim upstream GETs = %d, want 2", calls)
 	}
-	if demotions := svc.metrics.Snapshot().Demotions; demotions != 1 {
-		t.Fatalf("demotions = %d, want 1", demotions)
+	if demotions := svc.metrics.Snapshot().Demotions; demotions != 0 {
+		t.Fatalf("demotions = %d, want 0", demotions)
+	}
+	if body := scrapeMetrics(t, svc); !strings.Contains(body, "slizen_hotness_capacity_observations_dropped_total 1") {
+		t.Fatalf("capacity drop did not update metric:\n%s", body)
 	}
 }
 
@@ -557,6 +607,93 @@ func TestStaleFallbackSurvivesUnrelatedCacheObservation(t *testing.T) {
 	}
 }
 
+func TestPlainSETWritesThroughHotCache(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	up := testutil.NewFakeUpstream()
+	up.Put("k", []byte("old"), 0)
+	svc := newTestService(up, clock)
+	promoteAndCache(t, svc, clock, "k")
+
+	getsBefore := up.GetCallCount("k")
+	invalidationsBefore := svc.metrics.Snapshot().Invalidations
+	result, err := svc.ExecuteWrite(context.Background(), "SET", []string{"k", "new"}, []string{"k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "OK" {
+		t.Fatalf("SET result = %#v, want OK", result)
+	}
+
+	value, err := svc.Get(context.Background(), "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !value.Exists || string(value.Data) != "new" {
+		t.Fatalf("GET after SET = %+v, want write-through value", value)
+	}
+	if got := up.GetCallCount("k"); got != getsBefore {
+		t.Fatalf("GET after SET reached upstream: calls = %d, want %d", got, getsBefore)
+	}
+	if got := svc.metrics.Snapshot().Invalidations; got != invalidationsBefore+1 {
+		t.Fatalf("successful write-through invalidations = %d, want %d", got, invalidationsBefore+1)
+	}
+}
+
+func TestPlainSETRequiresHotCachePolicy(t *testing.T) {
+	tests := []struct {
+		name       string
+		edit       func(*config.Config)
+		promoteKey bool
+	}{
+		{
+			name: "observe policy",
+			edit: func(cfg *config.Config) {
+				cfg.Mode = "observe"
+			},
+			promoteKey: true,
+		},
+		{
+			name: "deny policy",
+			edit: func(cfg *config.Config) {
+				cfg.Cache.Policies = []config.CachePolicyConfig{{Prefix: "k", Mode: "deny"}}
+			},
+			promoteKey: true,
+		},
+		{
+			name: "cold cache key",
+			edit: func(*config.Config) {
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clock := testutil.NewFakeClock(time.Unix(0, 0))
+			up := testutil.NewFakeUpstream()
+			up.Put("k", []byte("old"), 0)
+			svc := newTestServiceWithConfig(up, clock, tt.edit)
+			if tt.promoteKey {
+				svc.tracker.ObserveWithState("k")
+				clock.Advance(time.Second)
+				svc.tracker.ObserveWithState("k")
+				if !svc.tracker.IsHot("k") {
+					t.Fatal("test setup did not make key hot")
+				}
+			}
+			if !svc.cache.Put("k", []byte("old"), time.Minute) {
+				t.Fatal("test setup did not seed cache")
+			}
+
+			if _, err := svc.ExecuteWrite(context.Background(), "SET", []string{"k", "new"}, []string{"k"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := svc.cache.Get("k"); ok {
+				t.Fatal("ineligible plain SET left a local cached value")
+			}
+		})
+	}
+}
+
 func TestSupportedWritesInvalidateCachedValues(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -564,7 +701,7 @@ func TestSupportedWritesInvalidateCachedValues(t *testing.T) {
 		args    []string
 		keys    []string
 	}{
-		{name: "SET", command: "SET", args: []string{"k", "new"}, keys: []string{"k"}},
+		{name: "SET with option", command: "SET", args: []string{"k", "new", "NX"}, keys: []string{"k"}},
 		{name: "SETEX", command: "SETEX", args: []string{"k", "60", "new"}, keys: []string{"k"}},
 		{name: "PSETEX", command: "PSETEX", args: []string{"k", "60000", "new"}, keys: []string{"k"}},
 		{name: "DEL multiple keys", command: "DEL", args: []string{"k1", "k2"}, keys: []string{"k1", "k2"}},
@@ -616,7 +753,7 @@ func TestWriteNilReplyStillInvalidatesCachedValue(t *testing.T) {
 	}
 
 	up.SetDoNil(true)
-	result, err := svc.ExecuteWrite(context.Background(), "SET", []string{"k", "new", "NX"}, []string{"k"})
+	result, err := svc.ExecuteWrite(context.Background(), "SET", []string{"k", "new"}, []string{"k"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -625,6 +762,169 @@ func TestWriteNilReplyStillInvalidatesCachedValue(t *testing.T) {
 	}
 	if _, ok := svc.cache.Get("k"); ok {
 		t.Fatal("expected nil-reply write to invalidate local cache")
+	}
+}
+
+func TestConcurrentSETsAreFinalizedInUpstreamOrder(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	up := newBlockedWriteUpstream()
+	up.Put("k", []byte("old"), 0)
+	svc := newTestService(up, clock)
+	promoteAndCache(t, svc, clock, "k")
+
+	started, release := up.blockNextWrite()
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := svc.ExecuteWrite(context.Background(), "SET", []string{"k", "first"}, []string{"k"})
+		firstDone <- err
+	}()
+	<-started
+	if call := <-up.entered; len(call) != 3 || call[0] != "SET" || call[2] != "first" {
+		t.Fatalf("first upstream call = %q", call)
+	}
+
+	secondWaiting := make(chan struct{})
+	secondCtx := &observedDoneContext{Context: context.Background(), observed: secondWaiting}
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := svc.ExecuteWrite(secondCtx, "SET", []string{"k", "second"}, []string{"k"})
+		secondDone <- err
+	}()
+	<-secondWaiting
+	select {
+	case call := <-up.entered:
+		t.Fatalf("second SET reached upstream before first finalized: %q", call)
+	default:
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	if call := <-up.entered; len(call) != 3 || call[0] != "SET" || call[2] != "second" {
+		t.Fatalf("second upstream call = %q", call)
+	}
+
+	item, ok := svc.cache.Get("k")
+	if !ok || string(item.Value) != "second" {
+		t.Fatalf("cached value after ordered SETs = %q, cached=%t", item.Value, ok)
+	}
+	value, err := up.Get(context.Background(), "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !value.Exists || string(value.Data) != "second" {
+		t.Fatalf("upstream value after ordered SETs = %+v", value)
+	}
+}
+
+func TestConcurrentSETThenDELFinalizesDeletionLast(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	up := newBlockedWriteUpstream()
+	up.Put("k", []byte("old"), 0)
+	svc := newTestService(up, clock)
+	promoteAndCache(t, svc, clock, "k")
+
+	started, release := up.blockNextWrite()
+	setDone := make(chan error, 1)
+	go func() {
+		_, err := svc.ExecuteWrite(context.Background(), "SET", []string{"k", "new"}, []string{"k"})
+		setDone <- err
+	}()
+	<-started
+	if call := <-up.entered; len(call) != 3 || call[0] != "SET" {
+		t.Fatalf("first upstream call = %q", call)
+	}
+
+	delWaiting := make(chan struct{})
+	delCtx := &observedDoneContext{Context: context.Background(), observed: delWaiting}
+	delDone := make(chan error, 1)
+	go func() {
+		_, err := svc.ExecuteWrite(delCtx, "DEL", []string{"k"}, []string{"k"})
+		delDone <- err
+	}()
+	<-delWaiting
+	select {
+	case call := <-up.entered:
+		t.Fatalf("DEL reached upstream before SET finalized: %q", call)
+	default:
+	}
+
+	close(release)
+	if err := <-setDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-delDone; err != nil {
+		t.Fatal(err)
+	}
+	if call := <-up.entered; len(call) != 2 || call[0] != "DEL" {
+		t.Fatalf("second upstream call = %q", call)
+	}
+	if _, ok := svc.cache.Get("k"); ok {
+		t.Fatal("SET write-through survived a later DEL")
+	}
+	value, err := up.Get(context.Background(), "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Exists {
+		t.Fatalf("upstream value after SET then DEL = %+v, want missing", value)
+	}
+}
+
+func TestMutationGateAcquiresUniqueStripesInSortedOrder(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	svc := newTestService(testutil.NewFakeUpstream(), clock)
+	first := "stripe-a"
+	second := ""
+	for i := 0; ; i++ {
+		candidate := "stripe-b-" + strconv.Itoa(i)
+		if cacheEpochStripe(candidate) != cacheEpochStripe(first) {
+			second = candidate
+			break
+		}
+	}
+
+	stripes, err := svc.acquireMutationStripes(context.Background(), []string{second, first, second, first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.releaseMutationStripes(stripes)
+	if len(stripes) != 2 {
+		t.Fatalf("acquired stripes = %v, want two unique stripes", stripes)
+	}
+	if stripes[0] >= stripes[1] {
+		t.Fatalf("acquired stripes = %v, want ascending order", stripes)
+	}
+}
+
+func TestMutationGateWaitRespectsContextCancellation(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	svc := newTestService(testutil.NewFakeUpstream(), clock)
+	held, err := svc.acquireMutationStripes(context.Background(), []string{"k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.releaseMutationStripes(held)
+
+	baseCtx, cancel := context.WithCancel(context.Background())
+	waiting := make(chan struct{})
+	ctx := &observedDoneContext{Context: baseCtx, observed: waiting}
+	waitDone := make(chan error, 1)
+	go func() {
+		stripes, acquireErr := svc.acquireMutationStripes(ctx, []string{"k"})
+		if acquireErr == nil {
+			svc.releaseMutationStripes(stripes)
+		}
+		waitDone <- acquireErr
+	}()
+	<-waiting
+	cancel()
+	if err := <-waitDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("gate wait error = %v, want context canceled", err)
 	}
 }
 
@@ -879,6 +1179,38 @@ func TestWriteErrorConservativelyInvalidatesCachedValue(t *testing.T) {
 	}
 	if _, ok := svc.cache.Get("k"); ok {
 		t.Fatal("ambiguous write outcome left a cached value")
+	}
+}
+
+func TestAmbiguousSETOutcomeInvalidatesAfterUpstreamApplied(t *testing.T) {
+	clock := testutil.NewFakeClock(time.Unix(0, 0))
+	up := newBlockedWriteUpstream()
+	up.Put("k", []byte("old"), 0)
+	svc := newTestService(up, clock)
+	promoteAndCache(t, svc, clock, "k")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	started, release := up.blockNextWrite()
+	defer close(release)
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := svc.ExecuteWrite(ctx, "SET", []string{"k", "new"}, []string{"k"})
+		writeDone <- err
+	}()
+	<-started
+	cancel()
+	if err := <-writeDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("SET error = %v, want context canceled", err)
+	}
+	if _, ok := svc.cache.Get("k"); ok {
+		t.Fatal("ambiguous applied SET left a cached value")
+	}
+	value, err := up.Get(context.Background(), "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !value.Exists || string(value.Data) != "new" {
+		t.Fatalf("test setup did not apply upstream SET: %+v", value)
 	}
 }
 

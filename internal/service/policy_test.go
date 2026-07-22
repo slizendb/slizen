@@ -243,7 +243,7 @@ func TestOversizedRefreshDeletesOlderStaleEntry(t *testing.T) {
 	}
 }
 
-func TestTrackingEvictionDeletesCachedEntryBeforeStaleGrace(t *testing.T) {
+func TestTrackingCapacityDropRetainsProtectedEntry(t *testing.T) {
 	clock := testutil.NewFakeClock(time.Unix(0, 0))
 	up := testutil.NewFakeUpstream()
 	key := "limited:key"
@@ -261,30 +261,26 @@ func TestTrackingEvictionDeletesCachedEntryBeforeStaleGrace(t *testing.T) {
 	if _, err := svc.Get(context.Background(), "other:key"); err != nil {
 		t.Fatal(err)
 	}
+	found := false
 	for _, snapshot := range svc.tracker.Snapshots(10) {
 		if snapshot.Key == key {
-			t.Fatal("test setup did not evict the cached key from hotness tracking")
+			found = true
 		}
 	}
-	if _, ok := svc.cache.GetStale(key, 5*time.Second); ok {
-		t.Fatal("tracking eviction retained a cached entry inside stale grace")
+	if !found {
+		t.Fatal("capacity pressure evicted the protected key from hotness tracking")
 	}
-
-	up.Put(key, []byte("new"), 0)
-	value, err := svc.Get(context.Background(), key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(value.Data) != "new" {
-		t.Fatalf("refresh value = %q, want new", value.Data)
-	}
-	if _, ok := svc.cache.GetStale(key, 5*time.Second); ok {
-		t.Fatal("successful cold refresh left the superseded stale value cached")
+	if _, ok := svc.cache.GetStale(key, 5*time.Second); !ok {
+		t.Fatal("capacity pressure deleted the protected value")
 	}
 
 	up.SetFailure(true)
-	if _, err := svc.Get(context.Background(), key); err == nil {
-		t.Fatal("superseded stale value was served after a cold refresh")
+	value, err := svc.Get(context.Background(), key)
+	if err != nil {
+		t.Fatalf("protected value was not served after capacity drop: %v", err)
+	}
+	if string(value.Data) != "old" {
+		t.Fatalf("protected value = %q, want old", value.Data)
 	}
 }
 

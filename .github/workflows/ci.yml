@@ -185,6 +185,13 @@ jobs:
               and .origin.validation_mismatches == 0
               and .slizen.validation_mismatches == 0
               and (.slizen.cache_hits | type == "number")
+              and (.slizen.cache_misses | type == "number")
+              and (.slizen.cache_misses_policy_bypass | type == "number")
+              and (.slizen.cache_misses_not_admitted | type == "number")
+              and (.slizen.cache_misses_not_present | type == "number")
+              and (.slizen.cache_misses_policy_bypass
+                + .slizen.cache_misses_not_admitted
+                + .slizen.cache_misses_not_present == .slizen.cache_misses)
               and (.cache_hit_ratio_percent | type == "number")
               and (.origin_get_reduction_percent | type == "number")
             )

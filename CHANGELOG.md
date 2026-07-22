@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.2.3 - 2026-07-23 - Release Candidate: Bounded Two-Hit Admission
+
+Release status: candidate source tree. No `v0.2.3` tag, published image, immutable digest, or image-bound release evidence is claimed yet.
+
+### Added
+
+- Cache-policy reads now use bounded two-hit admission: an eligible first miss may retain a short-lived probationary value, and one later read promotes and serves that value without another origin GET.
+- The protected tier receives seven eighths and the probationary tier one eighth of the existing global byte and entry budgets. This is a partition of the configured limits, not additional memory.
+- Cache miss attribution now uses the fixed `policy_bypass`, `not_admitted`, `not_present`, and internal `unclassified` reason set. Status and workload evidence expose the three request-path reasons without using Redis keys as labels.
+- At hotness capacity, an unseen observation now does O(1) victim work and is dropped when the current FIFO victim is HOT. Audit `capacity_observations_dropped`, Prometheus `slizen_hotness_capacity_observations_dropped_total`, and `telemetry_complete=false` expose that bounded protection; it is not an unlimited scan-resistance claim.
+
+### Changed
+
+- Probationary admission preserves the candidate's original absolute local expiry when it moves into the protected tier. Candidate retention is additionally capped by the hotness window.
+- A successful, exact, option-free `SET key value` through Slizen refreshes the protected value only when the key is already admitted and still matches a cache policy. Cold keys, option-bearing `SET`, other mutations, nil replies, and errors keep conservative invalidation behavior.
+- Proxied mutations serialize per bounded key stripe, invalidate protected and probationary state before upstream dispatch, and apply a final epoch barrier so overlapping refills cannot restore superseded data.
+
+### Performance evidence
+
+- Five local Docker repeats used the unchanged cold, request-bound `skew-99-1` workload with seed 42, 1,000 keys, 100,000 generated operations per phase, a 95/5 read/write mix, 128-byte values, and concurrency 32. Direct origin GETs were `94,961` in every repeat; Slizen origin GETs were `798`–`803`, a `99.154390%`–`99.159655%` reduction, with a `99.121745%`–`99.151231%` cache-hit ratio.
+- Every repeat had zero request failures, value mismatches, final-validation failures, and final-validation mismatches. Slizen read p99 was `1.175`–`1.251 ms` versus `0.986`–`1.042 ms` direct, so this supports an origin-load claim, not a speed claim.
+- These are local source-tree release-candidate measurements, not a tagged-image result or a universal production threshold.
+
+### Limitations
+
+- Direct writes to Redis or Valkey still bypass Slizen's invalidation and may remain stale until local TTL expiration.
+- The release remains a single-node developer preview with limited Redis compatibility and an unauthenticated admin API.
+
 ## v0.2.2 - 2026-07-22 - Proxy Tax Reduction and Benchmark Attribution
 
 ### Changed

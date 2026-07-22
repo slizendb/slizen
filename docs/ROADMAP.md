@@ -75,6 +75,29 @@ Status: released developer preview (`v0.2.2`) on 2026-07-22. The tag resolves to
 
 Release gate: the complete v0.2.1 safety contract remains green, the fixed-size workload evidence proves its sample accounting, and proxy-overhead claims are backed by repeated benchmarks with explicit scope.
 
+## v0.2.3: Bounded two-hit admission
+
+Status: release candidate in the source tree; not tagged or published. No v0.2.3 image digest or image-bound release evidence exists yet.
+
+Implementation:
+
+- [x] Partition the existing cache limits into a seven-eighths protected tier and one-eighth probationary tier without increasing global byte or entry budgets.
+- [x] Retain the first eligible successful miss as a short-lived candidate and let one later read promote it while preserving its original absolute local expiry.
+- [x] Keep coalesced waiters from turning one cold miss into artificial multi-hit admission.
+- [x] Refresh an already admitted cache-policy key after a successful exact option-free `SET`, while preserving conservative invalidation for every other mutation or ambiguous outcome.
+- [x] Invalidate protected and probationary state before proxied mutation dispatch and retain a final epoch barrier against overlapping stale refills.
+- [x] Attribute misses with fixed bounded `policy_bypass`, `not_admitted`, and `not_present` counters in status and workload evidence.
+- [x] Protect the current HOT FIFO tracker victim with O(1) capacity-drop behavior and expose incomplete telemetry through `capacity_observations_dropped` and `slizen_hotness_capacity_observations_dropped_total`.
+- [x] Record five unchanged cold request-bound 99/1 local Docker repeats with 798–803 Slizen origin GETs versus 94,961 direct, 99.154390–99.159655% reduction, zero failures or mismatches, and no speed claim.
+
+Release closure:
+
+- [ ] Pass the full clean-commit Go, race, Docker, Kubernetes, and four-scenario request-bound release gate.
+- [ ] Publish and verify the `v0.2.3` tag, GHCR digest, provenance, and exact-image evidence bundle.
+- [ ] Replace release-candidate wording only after those immutable artifacts exist.
+
+Release gate: the v0.2.2 safety and attribution contract remains green; cache tier totals stay within the configured global budgets; stale-refill and write races remain deterministic; and published performance statements distinguish origin-load reduction from end-to-end speed.
+
 ## v0.3: Direct-origin invalidation safety
 
 Status: planned.

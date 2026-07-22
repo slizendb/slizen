@@ -12,6 +12,8 @@ Slizen v0.2 — single-node, не source of truth и поддерживает т
 
 **Evidence, а не обещание скорости.** В воспроизводимом image-bound synthetic-run v0.2.2 на 1 000 ключей с распределением 99/1 Slizen измерил **на 89,778% меньше origin GET** (`94 961` напрямую против `9 707` через Slizen), cache-hit ratio `73,628%` и ноль request failures, value mismatches, final-validation failures и final-validation mismatches. Атрибутированный read p99 был `2,137 ms` через Slizen против `1,460 ms` напрямую, поэтому это не утверждение «Slizen быстрее». Вот [сырой JSON релиза](https://github.com/slizendb/slizen/releases/download/v0.2.2/slizen-workload-result.json) и [методика](docs/BENCHMARKING.md); результат относится только к конкретному runner, конфигурации и workload.
 
+**v0.2.3 пока release candidate в source tree.** Bounded two-hit admission и exact-SET refresh для уже admitted keys снизили origin GET с `94 961` напрямую до `798`–`803` в пяти неизменённых локальных cold 99/1 повторах (`99,154390%`–`99,159655%` снижения) при нуле failures и mismatches. Read p99 Slizen был `1,175`–`1,251 ms` против `0,986`–`1,042 ms` напрямую: это результат про снижение origin load, а не обещание скорости или универсальных 99%. Это локальный candidate evidence, не tag, опубликованный image, digest или image-bound release; стабильная установка ниже остаётся v0.2.2 до публикации. См. [candidate notes](docs/RELEASE_NOTES_v0.2.3.md).
+
 Ищем трёх design partners, которые реально сталкивались с hot-key инцидентами в Redis или Valkey. Если можешь проверить single-node developer preview в изолированной среде, [опиши workload без чувствительных данных](https://github.com/slizendb/slizen/issues/new?template=design-partner.yml).
 
 ```text
@@ -106,6 +108,8 @@ max_local_ttl = "10s"
 
 `deny` отключает локальный cache и hotness tracking, но не запрещает доступ к Redis; это не ACL. `observe` только измеряет и всегда читает upstream. `cache` включает adaptive caching и требует явные лимиты размера записи и свежего local TTL. Пустой prefix работает как catch-all, unmatched keys наследуют global mode, а глобальный `mode = "observe"` всегда остаётся safety ceiling и выключает локальный cache для всех правил. Конфигурация ограничена 1 024 правилами, 1 024 байтами на prefix, 262 144 байтами префиксов суммарно и 100 000 tracked keys. Redis-ключи длиннее 1 024 байт продолжают проксироваться для поддержанных команд, но не участвуют в hotness telemetry и local cache. Полный контракт описан в [configuration guide](docs/CONFIGURATION.md) и [ADR 0004](docs/adr/0004-per-prefix-cache-policy.md).
 
+В candidate v0.2.3 режим `cache` делит те же глобальные лимиты: семь восьмых защищённому admitted tier и одну восьмую probationary candidates. Первый подходящий успешный miss может сохранить короткоживущий candidate; один следующий read повышает и отдаёт его без нового origin GET, сохраняя исходный абсолютный срок expiration. Это не добавляет память сверх `cache.max_bytes` и `cache.max_entries`.
+
 ## Docker Compose demo
 
 ```sh
@@ -138,7 +142,7 @@ make validate-k8s
 - bounded local cache;
 - hot-key tracker с hysteresis и cooldown;
 - request coalescing через `singleflight`;
-- write-driven invalidation;
+- pre-write conservative invalidation и exact-SET refresh только для уже admitted cache-policy keys;
 - Prometheus metrics;
 - CLI `slizenctl`;
 - Docker Compose demo с Valkey;
@@ -184,7 +188,9 @@ curl http://127.0.0.1:9090/metrics
 
 Raw values никогда не попадают в логи, метрики или admin API. Hot-key output по умолчанию показывает HMAC-SHA256 identifier ключа. `privacy.key_visibility = "plain"` включай только на приватном admin listener для локальной отладки.
 
-`/v1/audit` и `slizenctl audit` выдают bounded JSON-отчёт с effective policy, recommendation и стабильными reason codes. Policy prefixes и Redis values в отчёт не попадают. `telemetry_complete=false` означает, что текущий набор обрезан лимитом отчёта, tracker уже вытеснял ключи или наблюдение ключа длиннее 1 024 байт было пропущено.
+`/v1/status`, workload JSON и Prometheus отдельно показывают cache misses с фиксированными причинами `policy_bypass`, `not_admitted` и `not_present`. Оба cache tier входят в те же aggregate bytes/entries. Redis keys никогда не используются как labels.
+
+`/v1/audit` и `slizenctl audit` выдают bounded JSON-отчёт с effective policy, recommendation и стабильными reason codes. Policy prefixes и Redis values в отчёт не попадают. `telemetry_complete=false` означает, что текущий набор обрезан лимитом отчёта, tracker уже вытеснял ключи, unseen observation был пропущен ради текущего HOT FIFO victim при полном tracker или ключ длиннее 1 024 байт не наблюдался. Capacity drops видны в `capacity_observations_dropped` и метрике `slizen_hotness_capacity_observations_dropped_total`; O(1) правило защищает текущий HOT victim, но не обещает unlimited scan resistance.
 
 ## Разработка
 
@@ -209,9 +215,10 @@ Release материалы:
 - [docs/RELEASE_NOTES_v0.2.md](docs/RELEASE_NOTES_v0.2.md)
 - [docs/RELEASE_NOTES_v0.2.1.md](docs/RELEASE_NOTES_v0.2.1.md)
 - [docs/RELEASE_NOTES_v0.2.2.md](docs/RELEASE_NOTES_v0.2.2.md)
+- [docs/RELEASE_NOTES_v0.2.3.md](docs/RELEASE_NOTES_v0.2.3.md) — source-tree release candidate
 
 ## Roadmap
 
-[Релиз v0.2.2 по производительности](https://github.com/slizendb/slizen/releases/tag/v0.2.2) опубликован 2026-07-22 вместе с checksummed image-bound bundle и отдельным 100 000-key evidence. Single-node safe-staging scope не расширился, но измеренный proxy tax стал ниже, а workload attribution — точнее. v0.3 — Redis/Valkey-assisted invalidation для прямых записей в origin с fail-safe поведением. Mesh, Operator и hosted control plane остаются более поздними гипотезами и начнутся только после подтверждённого спроса реальных пользователей.
+[Релиз v0.2.2 по производительности](https://github.com/slizendb/slizen/releases/tag/v0.2.2) опубликован 2026-07-22 вместе с checksummed image-bound bundle и отдельным 100 000-key evidence. v0.2.3 пока только source-tree release candidate: bounded two-hit admission, exact-SET refresh и fixed miss attribution реализованы и локально повторены, но clean-commit gate, tag, image, provenance и exact-image evidence ещё не закрыты. v0.3 — Redis/Valkey-assisted invalidation для прямых записей в origin с fail-safe поведением. Mesh, Operator и hosted control plane остаются более поздними гипотезами и начнутся только после подтверждённого спроса реальных пользователей.
 
 Gossip не даёт write consensus. Slizen остаётся cache layer.

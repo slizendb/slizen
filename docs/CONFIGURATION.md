@@ -29,6 +29,29 @@ Without the first rule, every unmatched key is eligible for adaptive caching
 under the global limits. Keep writes flowing through Slizen where possible;
 direct origin writes may remain stale until the local TTL expires.
 
+In `cache` mode, v0.2.3 partitions the existing `cache.max_bytes` and non-zero
+`cache.max_entries` limits into seven eighths for protected admitted values and
+one eighth for probationary candidates. There is no extra allocation or new
+configuration switch. An eligible first miss can retain a candidate for at most
+the normal local TTL and `hotness.window`; one later read can promote it, carrying
+forward the remaining TTL instead of restarting expiration. Limits too small to
+split retain protected-only behavior.
+
+A successful exact `SET key value` without options can refresh an already
+admitted key after Redis or Valkey accepts it. The key must still match a
+`cache` policy; cold keys are not admitted by writes. Option-bearing `SET`, all
+other mutations, nil replies, and errors remain conservatively invalidating.
+Direct origin writes bypass this behavior and can leave either tier stale until
+local TTL expiration.
+
+At `hotness.max_tracked_keys`, an unseen observation performs one O(1) FIFO
+victim check. If that current victim is `HOT`, Slizen keeps it, advances the
+cursor, and drops the unseen observation instead of scanning. The audit field
+`capacity_observations_dropped` and Prometheus metric
+`slizen_hotness_capacity_observations_dropped_total` expose these events, and
+any drop makes `telemetry_complete=false`. This bounds request work and protects
+the current HOT victim; it is not unlimited scan resistance.
+
 ## RESP request and connection bounds
 
 The proxy applies these defaults:
@@ -76,4 +99,4 @@ export SLIZEN_KEY_HASH_SECRET='value-loaded-by-your-secret-manager'
 ```
 
 `cache.negative_ttl` is reserved for a later release and must remain `0s`.
-Slizen does not perform negative caching in v0.2.2.
+Slizen does not perform negative caching in v0.2.3.

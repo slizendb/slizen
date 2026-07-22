@@ -58,6 +58,7 @@ type Tracker struct {
 	nextVictim                   int
 	hot                          int
 	evictions                    uint64
+	capacityDrops                uint64
 	oversizedObservationsDropped uint64
 }
 
@@ -71,6 +72,7 @@ type View struct {
 	Tracked                      int
 	Hot                          int
 	Evictions                    uint64
+	CapacityDrops                uint64
 	OversizedObservationsDropped uint64
 }
 
@@ -80,6 +82,8 @@ type Observation struct {
 	Transitions                  []Transition
 	State                        State
 	Hot                          int
+	CapacityObservationDropped   bool
+	CapacityDrops                uint64
 	OversizedObservationDropped  bool
 	OversizedObservationsDropped uint64
 }
@@ -127,11 +131,21 @@ func (t *Tracker) ObserveWithState(key string) Observation {
 		return Observation{
 			Transitions:                  transitions,
 			Hot:                          t.hot,
+			CapacityDrops:                t.capacityDrops,
 			OversizedObservationDropped:  len(key) > MaxTrackedKeyBytes,
 			OversizedObservationsDropped: t.oversizedObservationsDropped,
 		}
 	}
-	ent, evictionTransition := t.getOrCreateLocked(key, now)
+	ent, evictionTransition, capacityDropped := t.getOrCreateLocked(key, now)
+	if capacityDropped {
+		return Observation{
+			Transitions:                  transitions,
+			Hot:                          t.hot,
+			CapacityObservationDropped:   true,
+			CapacityDrops:                t.capacityDrops,
+			OversizedObservationsDropped: t.oversizedObservationsDropped,
+		}
+	}
 	if evictionTransition != nil {
 		transitions = append(transitions, *evictionTransition)
 	}
@@ -144,6 +158,45 @@ func (t *Tracker) ObserveWithState(key string) Observation {
 		Transitions:                  transitions,
 		State:                        ent.state,
 		Hot:                          t.hot,
+		CapacityDrops:                t.capacityDrops,
+		OversizedObservationsDropped: t.oversizedObservationsDropped,
+	}
+}
+
+// Admit promotes an already tracked key without manufacturing request or EWMA
+// evidence. Elapsed windows are applied first so the transition is based on
+// the current tracker state.
+func (t *Tracker) Admit(key string) Observation {
+	now := t.clock.Now()
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	transitions := t.advanceLocked(now)
+	ent, ok := t.items[key]
+	if !ok {
+		return Observation{
+			Transitions:                  transitions,
+			Hot:                          t.hot,
+			CapacityDrops:                t.capacityDrops,
+			OversizedObservationsDropped: t.oversizedObservationsDropped,
+		}
+	}
+	if ent.state != StateHot {
+		before := ent.state
+		ent.state = StateHot
+		// Admission is a cache-reuse signal, not completed EWMA-window
+		// evidence. Natural observations must build any later streak anew.
+		ent.hotWindows = 0
+		ent.coolingAt = time.Time{}
+		t.adjustHotCountLocked(before, ent.state)
+		transitions = append(transitions, Transition{Key: ent.key, From: before, To: ent.state})
+	}
+	return Observation{
+		Transitions:                  transitions,
+		State:                        ent.state,
+		Hot:                          t.hot,
+		CapacityDrops:                t.capacityDrops,
 		OversizedObservationsDropped: t.oversizedObservationsDropped,
 	}
 }
@@ -187,6 +240,17 @@ func (t *Tracker) IsHot(key string) bool {
 	return ok && ent.state == StateHot
 }
 
+// IsTracked reports whether key currently has bounded admission state. It is
+// used to avoid retaining probationary values for keys that the tracker has
+// already evicted or intentionally refused to observe.
+func (t *Tracker) IsTracked(key string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	_, ok := t.items[key]
+	return ok
+}
+
 func (t *Tracker) Stats() (tracked int, hot int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -198,6 +262,12 @@ func (t *Tracker) Evictions() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.evictions
+}
+
+func (t *Tracker) CapacityDrops() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.capacityDrops
 }
 
 func (t *Tracker) OversizedObservationsDropped() uint64 {
@@ -219,6 +289,7 @@ func (t *Tracker) AdvanceAndSnapshot(limit int) View {
 		Tracked:                      len(t.items),
 		Hot:                          t.hot,
 		Evictions:                    t.evictions,
+		CapacityDrops:                t.capacityDrops,
 		OversizedObservationsDropped: t.oversizedObservationsDropped,
 	}
 	view.Snapshots = topSnapshots(t.items, now, limit)
@@ -237,9 +308,9 @@ func (t *Tracker) Snapshots(limit int) []Snapshot {
 	return topSnapshots(t.items, now, limit)
 }
 
-func (t *Tracker) getOrCreateLocked(key string, now time.Time) (*entry, *Transition) {
+func (t *Tracker) getOrCreateLocked(key string, now time.Time) (*entry, *Transition, bool) {
 	if ent, ok := t.items[key]; ok {
-		return ent, nil
+		return ent, nil, false
 	}
 
 	if len(t.admissionRing) < t.cfg.MaxTrackedKeys {
@@ -251,21 +322,27 @@ func (t *Tracker) getOrCreateLocked(key string, now time.Time) (*entry, *Transit
 		}
 		t.admissionRing = append(t.admissionRing, ent)
 		t.items[key] = ent
-		return ent, nil
+		return ent, nil, false
 	}
 
-	// Reuse the oldest admission slot. This keeps eviction deterministic and
-	// constant-time even when tracking is at its configured cardinality cap.
+	// Inspect exactly one admission slot per unseen observation. HOT entries get
+	// a second chance so a one-pass scan cannot evict protected keys; advancing
+	// the cursor still lets later observations reuse non-HOT slots in O(1).
 	victim := t.admissionRing[t.nextVictim]
+	t.nextVictim++
+	if t.nextVictim == len(t.admissionRing) {
+		t.nextVictim = 0
+	}
+	if victim.state == StateHot {
+		t.capacityDrops++
+		return nil, nil, true
+	}
+
 	victimKey := victim.key
 	victimState := victim.state
 	delete(t.items, victimKey)
 	t.adjustHotCountLocked(victimState, StateCold)
 	t.evictions++
-	t.nextVictim++
-	if t.nextVictim == len(t.admissionRing) {
-		t.nextVictim = 0
-	}
 
 	*victim = entry{
 		key:       key,
@@ -275,9 +352,9 @@ func (t *Tracker) getOrCreateLocked(key string, now time.Time) (*entry, *Transit
 	}
 	t.items[key] = victim
 	if victimState == StateCold {
-		return victim, nil
+		return victim, nil, false
 	}
-	return victim, &Transition{Key: victimKey, From: victimState, To: StateCold}
+	return victim, &Transition{Key: victimKey, From: victimState, To: StateCold}, false
 }
 
 func (t *Tracker) advanceLocked(now time.Time) []Transition {

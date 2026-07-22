@@ -49,6 +49,72 @@ func TestCommandLabelBoundsUserInput(t *testing.T) {
 	}
 }
 
+func TestCacheMissWithReasonRecordsFixedReasonSeries(t *testing.T) {
+	recorder := New()
+	recorder.CacheMissWithReason("get", CacheMissReasonPolicyBypass)
+	recorder.CacheMissWithReason("get", CacheMissReasonNotAdmitted)
+	recorder.CacheMissWithReason("get", CacheMissReasonNotPresent)
+	recorder.CacheMissWithReason("get", CacheMissReason(255))
+
+	snapshot := recorder.Snapshot()
+	if snapshot.CacheMisses != 4 {
+		t.Fatalf("cache misses = %d, want 4", snapshot.CacheMisses)
+	}
+	if snapshot.CacheMissesUnclassified != 1 ||
+		snapshot.CacheMissesPolicyBypass != 1 ||
+		snapshot.CacheMissesNotAdmitted != 1 ||
+		snapshot.CacheMissesNotPresent != 1 {
+		t.Fatalf("cache miss reason totals = %+v, want one of each", snapshot)
+	}
+
+	response := httptest.NewRecorder()
+	recorder.Handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	if response.Code != 200 {
+		t.Fatalf("metrics status = %d, want 200", response.Code)
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		`slizen_cache_misses_total{command="GET"} 4`,
+		`slizen_cache_miss_reasons_total{reason="not_admitted"} 1`,
+		`slizen_cache_miss_reasons_total{reason="not_present"} 1`,
+		`slizen_cache_miss_reasons_total{reason="policy_bypass"} 1`,
+		`slizen_cache_miss_reasons_total{reason="unclassified"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics missing %q:\n%s", want, body)
+		}
+	}
+	if got := strings.Count(body, "slizen_cache_miss_reasons_total{"); got != int(cacheMissReasonCount) {
+		t.Fatalf("cache miss reason series = %d, want %d:\n%s", got, cacheMissReasonCount, body)
+	}
+	if strings.Contains(body, `reason="255"`) {
+		t.Fatalf("invalid enum value escaped into a metric label:\n%s", body)
+	}
+}
+
+func TestCacheMissUsesUnclassifiedReason(t *testing.T) {
+	recorder := New()
+	recorder.CacheMiss("MGET")
+
+	snapshot := recorder.Snapshot()
+	if snapshot.CacheMisses != 1 || snapshot.CacheMissesUnclassified != 1 {
+		t.Fatalf("snapshot = %+v, want one unclassified cache miss", snapshot)
+	}
+}
+
+func TestHotnessCapacityDropsUseMonotonicHighWater(t *testing.T) {
+	recorder := New()
+	recorder.ObserveHotnessCapacityDrops(2)
+	recorder.ObserveHotnessCapacityDrops(1)
+	recorder.ObserveHotnessCapacityDrops(3)
+
+	response := httptest.NewRecorder()
+	recorder.Handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	if !strings.Contains(response.Body.String(), "slizen_hotness_capacity_observations_dropped_total 3") {
+		t.Fatalf("capacity-drop metric did not preserve monotonic total:\n%s", response.Body.String())
+	}
+}
+
 func TestAdvanceHighWaterNeverRegressesOrDoubleCounts(t *testing.T) {
 	var mark atomic.Uint64
 	if delta := advanceHighWater(&mark, 2); delta != 2 {

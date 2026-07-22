@@ -3,7 +3,7 @@
 Slizen ships two local benchmark paths:
 
 - `benchmark hotkey` is the v0.1 single-key demo and remains available for existing scripts.
-- `benchmark workload` is the v0.2 release workload harness for uniform, skewed, and moving-hot-key traffic, with key-and-write-version value verification from v0.2.1 and request-limit plus phase-latency attribution in v0.2.2.
+- `benchmark workload` is the v0.2 release workload harness for uniform, skewed, and moving-hot-key traffic, with key-and-write-version value verification from v0.2.1, request-limit plus phase-latency attribution from v0.2.2, and fixed cache-miss attribution in the v0.2.3 release candidate.
 
 Both paths produce local evidence for a specific machine and configuration. They are not scientific benchmarks or universal production capacity claims.
 
@@ -70,7 +70,7 @@ For each selected scenario, the harness:
 1. Generates bounded keys and deterministic fixed-size, key-and-write-version values and seeds generation zero directly into the origin.
 2. Runs the deterministic workload directly against the origin.
 3. Validates the final generation of every written key, then resets the origin dataset to generation zero.
-4. Initializes all benchmark client connections, then purges Slizen's disposable local cache.
+4. Initializes all benchmark client connections, then purges both disposable Slizen cache tiers.
 5. Runs the same deterministic workload shape through Slizen and validates every written key's final generation.
 6. Reads Slizen counters before and after the proxy phase.
 
@@ -87,6 +87,7 @@ The JSON result includes:
 - `validation_reads`, `validation_failures`, and `validation_mismatches` for the final post-write generation check;
 - origin GET reduction normalized per successful GET;
 - Slizen cache hit ratio from `/v1/status` counter deltas;
+- cache miss deltas attributed to the fixed `policy_bypass`, `not_admitted`, and `not_present` reasons;
 - Slizen CLI and daemon versions, origin version, and the benchmark CLI's Go, operating system, and architecture information.
 - an `evidence_valid` flag and notes explaining any failed, mismatched, non-isolated, reset, or restarted measurement.
 
@@ -94,7 +95,13 @@ The origin version is read with `INFO server`. If the origin ACL denies that com
 
 `origin_get_reduction_percent` can be negative if a valid run observes more origin GETs per successful read through Slizen than in the direct phase. `proved_origin_get_reduction` is true only when the measured proxy phase has cache hits, a positive reduction, no failed operations, zero value mismatches, monotonic daemon identity/counters, and an exact process-global request delta. Any stale-generation, cross-key, truncated, or corrupted GET payload invalidates the evidence instead of being counted as success. Any unrelated traffic through the same Slizen process also invalidates the reduction evidence instead of being silently attributed to the benchmark. A zero or false result is valid evidence, especially for uniform, write-heavy, short, or `observe`-mode runs.
 
-The top-level phase and scenario p50/p95/p99 fields remain mixed end-to-end aggregate distributions for schema compatibility. Use the command and ordering-wait objects to distinguish Redis round-trip time from harness serialization. Slizen read command latency still combines cache hits and misses: `/v1/status` provides phase-wide hit and miss counter deltas, not a per-request cache outcome that can be joined safely to individual latency samples. A latency object is omitted when its operation class has no successful samples; this keeps the workload-only objects out of `benchmark hotkey` JSON. Compare runs only when value size, ratio, concurrency, limits, termination reason, scenario, seed, Slizen configuration, and runtime environment match.
+The top-level phase and scenario p50/p95/p99 fields remain mixed end-to-end aggregate distributions for schema compatibility. Use the command and ordering-wait objects to distinguish Redis round-trip time from harness serialization. Slizen read command latency still combines cache hits and misses: `/v1/status` provides phase-wide hit and attributed-miss counter deltas, not a per-request cache outcome that can be joined safely to individual latency samples. A latency object is omitted when its operation class has no successful samples; this keeps the workload-only objects out of `benchmark hotkey` JSON. Compare runs only when value size, ratio, concurrency, limits, termination reason, scenario, seed, Slizen configuration, and runtime environment match.
+
+### v0.2.3 release-candidate local repeats
+
+Five local Docker repeats used the unchanged cold, request-bound `skew-99-1` workload with seed 42, 1,000 keys, 100,000 generated operations per phase, a 95/5 read/write mix, 128-byte values, and concurrency 32. Every direct phase made `94,961` origin GETs. Slizen made `798`–`803`, a `99.154390%`–`99.159655%` reduction, with a `99.121745%`–`99.151231%` cache-hit ratio. Every phase reached the request limit with zero request failures, value mismatches, final-validation failures, and final-validation mismatches.
+
+Slizen read p99 was `1.175`–`1.251 ms`, while direct read p99 was `0.986`–`1.042 ms`. These results support a narrow origin-load statement for this exact local workload; they do not establish that Slizen is faster, guarantee 99% reduction for another distribution, or replace tagged immutable-image evidence. v0.2.3 is still a release candidate, and publication must regenerate the bundle from the exact image digest.
 
 ### Resource bounds
 
@@ -147,7 +154,7 @@ The intended signal is narrower: under a repeated, read-heavy skew, determine wh
 
 ## Release evidence
 
-`make release-check` validates tagged source with 1,000 keys, concurrency 32, a fixed cap of 100,000 generated operations per phase, and a 30-second safety duration. The 20,000-operation moving-flash interval yields five deterministic flash windows when the cap is reached. Release evidence requires the exact `uniform`, `skew-80-20`, `skew-99-1`, and `moving-flash` scenario set. Every origin and Slizen phase must report exactly 100,000 `operation_attempts`, `termination_reason: "request_limit"`, command-latency samples matching those attempts, final-validation samples matching `validation_reads`, and total `requests` matching attempts plus validation reads. An unexpectedly slow or internally inconsistent phase fails the reproducibility gate explicitly. It also requires all four scenarios to have zero failures and zero `value_mismatches`; the stable 99/1 scenario must prove positive origin GET reduction with real cache hits. These are correctness and reproducibility gates, not pass/fail latency or capacity thresholds.
+`make release-check` validates tagged source with 1,000 keys, concurrency 32, a fixed cap of 100,000 generated operations per phase, and a 30-second safety duration. The 20,000-operation moving-flash interval yields five deterministic flash windows when the cap is reached. Release evidence requires the exact `uniform`, `skew-80-20`, `skew-99-1`, and `moving-flash` scenario set. Every origin and Slizen phase must report exactly 100,000 `operation_attempts`, `termination_reason: "request_limit"`, command-latency samples matching those attempts, final-validation samples matching `validation_reads`, and total `requests` matching attempts plus validation reads. Slizen miss reasons must be numeric and sum to its total cache misses. An unexpectedly slow or internally inconsistent phase fails the reproducibility gate explicitly. It also requires all four scenarios to have zero failures and zero `value_mismatches`; the stable 99/1 scenario must prove positive origin GET reduction with real cache hits. These are correctness and reproducibility gates, not pass/fail latency, capacity, or universal origin-reduction thresholds.
 
 After a tag passes validation, the release workflow publishes the multi-architecture image, records GitHub-native provenance, and runs `scripts/release_evidence.sh` against the exact `ghcr.io/slizendb/slizen@sha256:...` image. The resulting manifest binds the image digest, full commit, version, workload JSON, demo report, and SHA-256 checksums.
 
