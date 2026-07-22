@@ -63,7 +63,7 @@ For the standalone proxy:
 helm upgrade --install slizen ./charts/slizen \
   --namespace slizen-staging --create-namespace \
   --set-string upstream.address=redis.default.svc.cluster.local:6379 \
-  --set-string image.digest=sha256:RELEASE_DIGEST
+  --set-string image.digest=sha256:4006733aa64b6f55f25855f48a026d7b488ed44b5ad82d1a52ef5968d08daece
 kubectl rollout status deployment/slizen -n slizen-staging --timeout=2m
 ```
 

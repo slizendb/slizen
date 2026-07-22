@@ -37,9 +37,19 @@ gh attestation verify oci://ghcr.io/slizendb/slizen:0.2.1 \
 
 Use the digest from `release-evidence-manifest.json` for an immutable deployment. The same bundle includes `SHA256SUMS`, the demo report, benchmark JSON, workload JSON, status snapshots, hot-key output, and the privacy-safe audit.
 
+Published release identity:
+
+- Commit: `4ba2c1c5c9a1c89073ba47d90c83f98441dfe9a1`
+- Multi-architecture image: `ghcr.io/slizendb/slizen@sha256:4006733aa64b6f55f25855f48a026d7b488ed44b5ad82d1a52ef5968d08daece`
+- [GitHub Release and checksummed evidence](https://github.com/slizendb/slizen/releases/tag/v0.2.1)
+- [Release workflow](https://github.com/slizendb/slizen/actions/runs/29918332099)
+- [100,000-key extended validation](https://github.com/slizendb/slizen/actions/runs/29917703703)
+
 ## Evidence contract
 
 The release gate runs uniform, 80/20-like, 99/1-like, and moving-flash scenarios with 1,000 keys, concurrency 32, and 10 seconds per phase. All scenarios must have zero failures and zero value mismatches. The stable 99/1 scenario must additionally show real cache hits and positive measured origin GET reduction. There is deliberately no universal latency or capacity threshold on a shared runner.
+
+The image-bound v0.2.1 run completed all four scenarios with zero request failures and zero value or final-validation mismatches. Its synthetic 99/1 scenario measured 88.734% fewer origin GETs and a 65.736% cache-hit ratio; proxy p99 was `2.856 ms` versus `1.777 ms` direct, so this is evidence of upstream-load reduction for that run, not a speed claim. A separate 100,000-key validation also completed all four scenarios without failures or mismatches; its raw JSON and five-run high-cardinality benchmark output are attached to the release.
 
 The v0.2.0 release's earlier 100-key synthetic 99/1 run measured 91.376% fewer origin GETs per successful read, while proxy p99 was higher than direct p99. It remains evidence for that one run, not a claim that Slizen is universally faster. v0.2.1 publishes a new, image-bound evidence bundle rather than reusing that result as its own.
 

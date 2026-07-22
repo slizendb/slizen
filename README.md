@@ -10,7 +10,7 @@ Slizen is a self-hosted adaptive cache layer for read-heavy Redis and Valkey wor
 
 Slizen v0.2 is single-node, not a source of truth, and has limited Redis compatibility. Direct upstream writes may remain stale until local TTL expiration. The admin API binds locally by default and has no built-in authentication in v0.2.
 
-**Evidence, not a speed claim.** In one reproducible v0.2.0 synthetic 99/1-skew run, Slizen measured **91.376% fewer origin GETs per successful read**. Proxy p99 was `0.624 ms` versus `0.377 ms` direct, so this does not claim that Slizen was faster. See the [raw release JSON](https://github.com/slizendb/slizen/releases/download/v0.2.0/slizen-workload-result.json) and [methodology](docs/BENCHMARKING.md); results are specific to that machine, configuration, and workload.
+**Evidence, not a speed claim.** In the reproducible, image-bound v0.2.1 synthetic 1,000-key 99/1-skew run, Slizen measured **88.734% fewer origin GETs per successful read** with zero request failures and zero value or final-validation mismatches. Proxy p99 was `2.856 ms` versus `1.777 ms` direct, so this does not claim that Slizen was faster. See the [raw release JSON](https://github.com/slizendb/slizen/releases/download/v0.2.1/slizen-workload-result.json) and [methodology](docs/BENCHMARKING.md); results are specific to that runner, configuration, and workload.
 
 We are looking for three design partners with real Redis or Valkey hot-key incidents. If you can test a single-node developer preview in an isolated environment, [describe the workload without sensitive data](https://github.com/slizendb/slizen/issues/new?template=design-partner.yml).
 
@@ -266,7 +266,7 @@ Release prep:
 
 ## Roadmap
 
-v0.2 is the released safe-staging preview. v0.2.1 launch hardening is in progress; it preserves that scope while tightening safe defaults, bounds, evidence, and release hygiene. v0.3 moves direct-origin invalidation forward with Redis/Valkey server-assisted tracking and fail-safe behavior. Mesh, an Operator, and a hosted control plane are later hypotheses that require evidence from real users rather than version promises.
+v0.2.1 launch hardening was [released on 2026-07-22](https://github.com/slizendb/slizen/releases/tag/v0.2.1). It preserves the single-node safe-staging scope while tightening safe defaults, bounds, evidence, and release hygiene. v0.3 moves direct-origin invalidation forward with Redis/Valkey server-assisted tracking and fail-safe behavior. Mesh, an Operator, and a hosted control plane are later hypotheses that require evidence from real users rather than version promises.
 
 Gossip does not provide write consensus. Slizen remains a cache layer.
 

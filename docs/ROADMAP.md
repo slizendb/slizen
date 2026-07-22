@@ -36,9 +36,9 @@ Customer discovery runs in parallel with v0.2. Product validation targets are de
 
 ## v0.2.1: Launch hardening
 
-Status: release candidate complete on 2026-07-22; tag, image, and evidence publication remain. Until those artifacts are verified, v0.2.0 remains the released developer preview above.
+Status: released developer preview (`v0.2.1`) on 2026-07-22. The tag resolves to commit `4ba2c1c5c9a1c89073ba47d90c83f98441dfe9a1`; the verified multi-architecture image index is `sha256:4006733aa64b6f55f25855f48a026d7b488ed44b5ad82d1a52ef5968d08daece`. Checksummed evidence is attached to the [GitHub Release](https://github.com/slizendb/slizen/releases/tag/v0.2.1).
 
-Implemented in the release candidate:
+Implemented and released:
 
 - [x] Observe-first defaults and an explicit empty-prefix safety catch-all for selective cache promotion.
 - [x] Random process-local HMAC secret when an operator does not configure a stable one.
@@ -51,10 +51,10 @@ Implemented in the release candidate:
 
 Release closure:
 
-- [ ] Run the complete release gate from the intended clean commit.
-- [ ] Confirm public CI and immutable-image evidence are green.
-- [ ] Publish and verify the `v0.2.1` tag, GitHub Release, GHCR digest, provenance, and attached evidence.
-- [ ] Enable the repository security and branch rules listed in [PUBLIC_RELEASE_CHECKLIST.md](PUBLIC_RELEASE_CHECKLIST.md).
+- [x] Run the complete release gate from the intended clean commit.
+- [x] Confirm public CI and immutable-image evidence are green.
+- [x] Publish and verify the `v0.2.1` tag, GitHub Release, GHCR digest, provenance, and attached evidence.
+- [x] Enable the repository security and branch rules listed in [PUBLIC_RELEASE_CHECKLIST.md](PUBLIC_RELEASE_CHECKLIST.md).
 
 Release gate: safe defaults and bounded failure behavior survive unit, race, integration, Docker, Kubernetes, and workload validation, and every public evidence artifact resolves to one full commit and immutable image digest.
 
