@@ -2,7 +2,7 @@ apiVersion: v2
 name: slizen
 description: Observe-first Slizen proxy for Redis and Valkey staging workloads
 type: application
-version: 0.2.3
+version: 0.2.3-rc.1
 # A source-tree release candidate may intentionally default to the previous
 # verified runtime. Post-publish packaging aligns this with the exact digest.
 appVersion: "0.2.2"

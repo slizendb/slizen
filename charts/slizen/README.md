@@ -31,7 +31,7 @@ v0.2.3 is a source-tree release candidate, not a published image. Never derive
 or guess its digest. Verify a newer release exists before changing
 `image.digest`.
 
-The source chart has candidate `version: 0.2.3`, but its `appVersion`, default
+The source chart has candidate `version: 0.2.3-rc.1`, but its `appVersion`, default
 image tag, digest, and rendered application label intentionally remain
 `0.2.2`. When v0.2.3 is published, release closure must update all four runtime
 identity surfaces to the verified v0.2.3 artifact together.

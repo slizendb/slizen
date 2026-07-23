@@ -117,7 +117,7 @@ Release gate: the complete v0.2.1 safety contract remains green, the fixed-size 
 
 ## v0.2.3: Bounded two-hit admission
 
-Status: release candidate in the source tree; not tagged or published. No v0.2.3 image digest or image-bound release evidence exists yet.
+Status: v0.2.3-rc.1 release candidate in the source tree; not tagged or published. No v0.2.3-rc.1 image digest or image-bound release evidence exists yet.
 
 Implementation:
 
@@ -139,7 +139,7 @@ Implementation:
 Release closure:
 
 - [ ] Pass the full clean-commit Go, race, Docker, Kubernetes, and four-scenario request-bound release gate.
-- [ ] Publish and verify the `v0.2.3` tag, GHCR digest, provenance, and exact-image evidence bundle.
+- [ ] Publish and verify the `v0.2.3-rc.1` tag, GHCR digest, provenance, and exact-image evidence bundle.
 - [ ] Replace release-candidate wording only after those immutable artifacts exist.
 
 Release gate: the v0.2.2 safety and attribution contract remains green; cache tier totals stay within the configured global budgets; stale-refill and write races remain deterministic; and published performance statements distinguish origin-load reduction from end-to-end speed.

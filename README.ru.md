@@ -12,7 +12,7 @@ Slizen v0.2 — single-node, не source of truth и поддерживает т
 
 **Evidence, а не обещание скорости.** В воспроизводимом image-bound synthetic-run v0.2.2 на 1 000 ключей с распределением 99/1 Slizen измерил **на 89,778% меньше logical upstream GET calls** (`94 961` успешных direct GET против `9 707` logical calls через Slizen), cache-hit ratio `73,628%` и ноль request failures, value mismatches, final-validation failures и final-validation mismatches. Исторический artifact не снимал Redis/Valkey `commandstats`, поэтому это proxy-side estimate, а не доказательство физического числа wire-команд. Атрибутированный read p99 был `2,137 ms` через Slizen против `1,460 ms` напрямую, поэтому это не утверждение «Slizen быстрее». Вот [сырой JSON релиза](https://github.com/slizendb/slizen/releases/download/v0.2.2/slizen-workload-result.json) и [методика](docs/BENCHMARKING.md); результат относится только к конкретному runner, конфигурации и workload.
 
-**v0.2.3 пока release candidate в source tree.** Bounded two-hit admission и exact-SET refresh для уже admitted keys снизили logical upstream GET calls с `94 961` успешных direct GET до `798`–`803` в пяти неизменённых локальных cold 99/1 повторах (`99,154390%`–`99,159655%` proxy-side avoidance) при нуле failures и mismatches. Эти исторические локальные повторы тоже были сделаны до physical `commandstats` capture. Read p99 Slizen был `1,175`–`1,251 ms` против `0,986`–`1,042 ms` напрямую: это не обещание скорости или универсальных 99%. Это локальный candidate evidence, не tag, опубликованный image, digest или image-bound release; стабильная установка ниже остаётся v0.2.2 до публикации. См. [candidate notes](docs/RELEASE_NOTES_v0.2.3.md).
+**v0.2.3-rc.1 пока release candidate в source tree.** Bounded two-hit admission и exact-SET refresh для уже admitted keys снизили logical upstream GET calls с `94 961` успешных direct GET до `798`–`803` в пяти неизменённых локальных cold 99/1 повторах (`99,154390%`–`99,159655%` proxy-side avoidance) при нуле failures и mismatches. Эти исторические локальные повторы тоже были сделаны до physical `commandstats` capture. Read p99 Slizen был `1,175`–`1,251 ms` против `0,986`–`1,042 ms` напрямую: это не обещание скорости или универсальных 99%. Это локальный candidate evidence, не tag, опубликованный image, digest или image-bound release; стабильная установка ниже остаётся v0.2.2 до публикации. См. [candidate notes](docs/RELEASE_NOTES_v0.2.3-rc.1.md).
 
 Ищем трёх design partners, которые реально сталкивались с hot-key инцидентами в Redis или Valkey. Если можешь проверить single-node developer preview в изолированной среде, [опиши workload без чувствительных данных](https://github.com/slizendb/slizen/issues/new?template=design-partner.yml).
 
@@ -262,7 +262,7 @@ Release материалы:
 - [docs/RELEASE_NOTES_v0.2.md](docs/RELEASE_NOTES_v0.2.md)
 - [docs/RELEASE_NOTES_v0.2.1.md](docs/RELEASE_NOTES_v0.2.1.md)
 - [docs/RELEASE_NOTES_v0.2.2.md](docs/RELEASE_NOTES_v0.2.2.md)
-- [docs/RELEASE_NOTES_v0.2.3.md](docs/RELEASE_NOTES_v0.2.3.md) — source-tree release candidate
+- [docs/RELEASE_NOTES_v0.2.3-rc.1.md](docs/RELEASE_NOTES_v0.2.3-rc.1.md) — source-tree release candidate
 
 ## Roadmap
 
