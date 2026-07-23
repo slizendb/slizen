@@ -1,3 +1,9 @@
+{{- if hasKey .Values.podAnnotations "checksum/config" }}
+{{- fail "podAnnotations must not override the chart-owned checksum/config annotation" }}
+{{- end }}
+{{- if or (hasKey .Values.podLabels "app.kubernetes.io/name") (hasKey .Values.podLabels "app.kubernetes.io/instance") }}
+{{- fail "podLabels must not override chart-owned app.kubernetes.io/name or app.kubernetes.io/instance selector labels" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -50,13 +56,11 @@ spec:
                 secretKeyRef:
                   name: {{ . | quote }}
                   key: {{ $.Values.upstream.existingSecret.usernameKey | quote }}
-                  optional: true
             - name: SLIZEN_UPSTREAM_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ . | quote }}
                   key: {{ $.Values.upstream.existingSecret.passwordKey | quote }}
-                  optional: true
             {{- end }}
             {{- with .Values.privacy.existingSecret.name }}
             - name: SLIZEN_KEY_HASH_SECRET

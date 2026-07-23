@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -154,19 +155,26 @@ func TestWorkloadScenarioShapes(t *testing.T) {
 }
 
 func TestSummarizeWorkloadScenarioMath(t *testing.T) {
-	origin := benchmarkPhase{Reads: 1000, UpstreamGETs: 1000, P50Milliseconds: 0.1}
+	origin := benchmarkPhase{
+		Reads:              1000,
+		UpstreamGETs:       1000,
+		UpstreamGETsSource: originGETsSourceCommandstats,
+		P50Milliseconds:    0.1,
+	}
 	slizen := benchmarkPhase{
-		Reads:           1000,
-		UpstreamGETs:    200,
-		CacheHits:       800,
-		CacheMisses:     200,
-		CacheHitRatio:   80,
-		P50Milliseconds: 0.2,
-		P95Milliseconds: 0.5,
-		P99Milliseconds: 0.9,
+		Reads:                    1000,
+		UpstreamGETs:             200,
+		UpstreamGETsSource:       originGETsSourceCommandstats,
+		SlizenStatusUpstreamGETs: 200,
+		CacheHits:                800,
+		CacheMisses:              200,
+		CacheHitRatio:            80,
+		P50Milliseconds:          0.2,
+		P95Milliseconds:          0.5,
+		P99Milliseconds:          0.9,
 	}
 
-	result := summarizeWorkloadScenario(workloadScenarioSkew80, origin, slizen, true)
+	result := summarizeWorkloadScenario(workloadScenarioSkew80, origin, slizen, true, true)
 	if result.OriginGETReductionPercent != 80 {
 		t.Fatalf("origin GET reduction = %v, want 80", result.OriginGETReductionPercent)
 	}
@@ -183,7 +191,11 @@ func TestSummarizeWorkloadScenarioMath(t *testing.T) {
 		t.Fatal("expected evidence to be valid")
 	}
 
-	increase := workloadOriginGETReduction(origin, benchmarkPhase{Reads: 1000, UpstreamGETs: 1100})
+	increase := workloadOriginGETReduction(origin, benchmarkPhase{
+		Reads:              1000,
+		UpstreamGETs:       1100,
+		UpstreamGETsSource: originGETsSourceCommandstats,
+	})
 	if math.Abs(increase-(-10)) > 0.000001 {
 		t.Fatalf("origin GET increase = %v, want -10", increase)
 	}
@@ -193,7 +205,7 @@ func TestSummarizeWorkloadScenarioMath(t *testing.T) {
 
 	failedOrigin := origin
 	failedOrigin.Failures = 1
-	failed := summarizeWorkloadScenario(workloadScenarioSkew80, failedOrigin, slizen, true)
+	failed := summarizeWorkloadScenario(workloadScenarioSkew80, failedOrigin, slizen, true, true)
 	if failed.OriginGETReductionPercent != 0 || failed.CacheHitRatioPercent != 0 || failed.EvidenceValid || failed.ProvedOriginGETReduction {
 		t.Fatalf("failed phase produced reduction evidence: %+v", failed)
 	}
@@ -201,16 +213,27 @@ func TestSummarizeWorkloadScenarioMath(t *testing.T) {
 		t.Fatalf("failed-phase reduction = %v, want 0", reduction)
 	}
 
-	invalidStatus := summarizeWorkloadScenario(workloadScenarioSkew80, origin, slizen, false)
+	invalidStatus := summarizeWorkloadScenario(workloadScenarioSkew80, origin, slizen, false, true)
 	if invalidStatus.OriginGETReductionPercent != 0 || invalidStatus.CacheHitRatioPercent != 0 || invalidStatus.EvidenceValid || invalidStatus.ProvedOriginGETReduction {
 		t.Fatalf("invalid status delta produced reduction evidence: %+v", invalidStatus)
 	}
 
 	mismatched := slizen
 	mismatched.ValueMismatches = 1
-	mismatchResult := summarizeWorkloadScenario(workloadScenarioSkew80, origin, mismatched, true)
+	mismatchResult := summarizeWorkloadScenario(workloadScenarioSkew80, origin, mismatched, true, true)
 	if mismatchResult.EvidenceValid || mismatchResult.ProvedOriginGETReduction {
 		t.Fatalf("value mismatch produced valid evidence: %+v", mismatchResult)
+	}
+
+	invalidPhysical := summarizeWorkloadScenario(workloadScenarioSkew80, origin, slizen, true, false)
+	if invalidPhysical.OriginGETReductionPercent != 0 || invalidPhysical.EvidenceValid || invalidPhysical.ProvedOriginGETReduction {
+		t.Fatalf("invalid physical origin counter produced evidence: %+v", invalidPhysical)
+	}
+
+	noPhysicalSource := slizen
+	noPhysicalSource.UpstreamGETsSource = originGETsSourceUnavailable
+	if reduction := workloadOriginGETReduction(origin, noPhysicalSource); reduction != 0 {
+		t.Fatalf("non-physical source reduction = %v, want 0", reduction)
 	}
 }
 
@@ -245,10 +268,15 @@ func TestWorkloadValuesAreKeyAndVersionSpecificAndDetectCorruption(t *testing.T)
 }
 
 func TestHotKeyReductionRejectsValueMismatch(t *testing.T) {
-	origin := benchmarkPhase{Requests: 100, UpstreamGETs: 100}
-	hot := benchmarkPhase{Requests: 100, UpstreamGETs: 10, ValueMismatches: 1}
+	origin := benchmarkPhase{Requests: 100, UpstreamGETs: 100, UpstreamGETsSource: originGETsSourceCommandstats}
+	hot := benchmarkPhase{Requests: 100, UpstreamGETs: 10, UpstreamGETsSource: originGETsSourceCommandstats, ValueMismatches: 1}
 	if reduction := upstreamReduction(origin, hot); reduction != 0 {
 		t.Fatalf("reduction with value mismatch = %v, want 0", reduction)
+	}
+	hot.ValueMismatches = 0
+	hot.UpstreamGETsSource = originGETsSourceUnavailable
+	if reduction := upstreamReduction(origin, hot); reduction != 0 {
+		t.Fatalf("reduction without physical source = %v, want 0", reduction)
 	}
 }
 
@@ -288,6 +316,9 @@ func TestWorkloadBenchmarkJSONContainsReleaseEvidence(t *testing.T) {
 		`"cache_misses_policy_bypass"`,
 		`"cache_misses_not_admitted"`,
 		`"cache_misses_not_present"`,
+		`"upstream_gets_source"`,
+		`"origin_run_id"`,
+		`"slizen_status_upstream_gets"`,
 		`"evidence_valid"`,
 		`"value_mismatches"`,
 		`"validation_reads"`,
@@ -430,7 +461,7 @@ func TestApplyWorkloadStatusDeltaRequiresIsolatedMonotonicCounters(t *testing.T)
 	if valid := applyWorkloadStatusDelta(&phase, before, validAfter); !valid {
 		t.Fatalf("isolated status delta rejected: %+v", phase)
 	}
-	if phase.CacheHits != 60 || phase.CacheMisses != 20 || phase.UpstreamGETs != 20 || phase.CacheHitRatio != 75 {
+	if phase.CacheHits != 60 || phase.CacheMisses != 20 || phase.SlizenStatusUpstreamGETs != 20 || phase.UpstreamGETs != 0 || phase.CacheHitRatio != 75 {
 		t.Fatalf("status delta = %+v", phase)
 	}
 	if phase.CacheMissesPolicyBypass != 2 || phase.CacheMissesNotAdmitted != 11 || phase.CacheMissesNotPresent != 7 {
@@ -478,6 +509,239 @@ func TestApplyWorkloadStatusDeltaRequiresIsolatedMonotonicCounters(t *testing.T)
 				t.Fatalf("invalid status evidence did not produce a warning: %+v", got)
 			}
 		})
+	}
+}
+
+func TestApplyHotKeyStatusDeltaKeepsLogicalOriginGETsSeparate(t *testing.T) {
+	before := statusSnapshot{
+		Version:               "0.2.3",
+		Commit:                "abc123",
+		Mode:                  "cache",
+		KeyVisibility:         "hash",
+		Uptime:                "10s",
+		RequestsTotal:         100,
+		CacheHitsTotal:        80,
+		CacheMissesTotal:      20,
+		UpstreamRequestsTotal: 20,
+		UpstreamGETsTotal:     20,
+	}
+	after := before
+	after.Uptime = "11s"
+	after.RequestsTotal += 100
+	after.CacheHitsTotal += 90
+	after.CacheMissesTotal += 10
+	after.UpstreamRequestsTotal += 10
+	after.UpstreamGETsTotal += 10
+
+	phase := benchmarkPhase{Requests: 100}
+	if valid := applyHotKeyStatusDelta(&phase, before, after); !valid {
+		t.Fatalf("isolated hot-key status rejected: %+v", phase)
+	}
+	if phase.SlizenStatusUpstreamGETs != 10 || phase.UpstreamGETs != 0 || phase.CacheHitRatio != 90 {
+		t.Fatalf("hot-key status delta = %+v", phase)
+	}
+
+	after.RequestsTotal++
+	invalid := benchmarkPhase{Requests: 100}
+	if valid := applyHotKeyStatusDelta(&invalid, before, after); valid {
+		t.Fatalf("concurrent hot-key status traffic accepted: %+v", invalid)
+	}
+}
+
+func TestParseOriginGETCallsFromCommandstats(t *testing.T) {
+	tests := []struct {
+		name    string
+		info    string
+		want    uint64
+		wantErr string
+	}{
+		{
+			name: "redis",
+			info: "# Commandstats\r\ncmdstat_get:calls=123,usec=456,usec_per_call=3.71,rejected_calls=0,failed_calls=0\r\n",
+			want: 123,
+		},
+		{
+			name: "valkey upper section",
+			info: "# Commandstats\ncmdstat_set:calls=4,usec=8\ncmdstat_get:calls=0,usec=0\n",
+			want: 0,
+		},
+		{
+			name: "no GETs yet",
+			info: "# Commandstats\r\ncmdstat_set:calls=1,usec=1\r\n",
+			want: 0,
+		},
+		{
+			name:    "wrong section",
+			info:    "# Server\r\nredis_version:7.2.0\r\n",
+			wantErr: "Commandstats section",
+		},
+		{
+			name:    "malformed calls",
+			info:    "# Commandstats\r\ncmdstat_get:calls=not-a-number,usec=1\r\n",
+			wantErr: "cmdstat_get calls",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseOriginGETCalls(tt.info)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("calls = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseOriginRunID(t *testing.T) {
+	if got, err := parseOriginRunID("# Server\r\nrun_id:0123456789abcdef\r\nredis_version:7.2.0\r\n"); err != nil || got != "0123456789abcdef" {
+		t.Fatalf("run_id = %q, err = %v", got, err)
+	}
+	if got, err := parseOriginRunID("# Server\r\nredis_version:7.2.0\r\n"); err == nil || got != "" {
+		t.Fatalf("missing run_id = %q, err = %v", got, err)
+	}
+}
+
+func TestApplyOriginGETCounterDeltaFailsClosed(t *testing.T) {
+	valid := benchmarkPhase{}
+	if ok := applyOriginGETCounterDelta(
+		&valid,
+		originGETCounterSnapshot{Calls: 100, RunID: "run-a"},
+		originGETCounterSnapshot{Calls: 140, RunID: "run-a"},
+	); !ok {
+		t.Fatalf("valid commandstats delta rejected: %+v", valid)
+	}
+	if valid.UpstreamGETs != 40 || valid.UpstreamGETsSource != originGETsSourceCommandstats {
+		t.Fatalf("physical delta = %+v", valid)
+	}
+
+	unavailable := benchmarkPhase{}
+	if ok := applyOriginGETCounterDelta(
+		&unavailable,
+		originGETCounterSnapshot{Err: errors.New("NOPERM")},
+		originGETCounterSnapshot{Calls: 140, RunID: "run-a"},
+	); ok {
+		t.Fatalf("unavailable commandstats accepted: %+v", unavailable)
+	}
+	if unavailable.UpstreamGETs != 0 || unavailable.UpstreamGETsSource != originGETsSourceUnavailable || len(unavailable.Notes) == 0 {
+		t.Fatalf("unavailable commandstats did not fail closed: %+v", unavailable)
+	}
+
+	nonMonotonic := benchmarkPhase{}
+	if ok := applyOriginGETCounterDelta(
+		&nonMonotonic,
+		originGETCounterSnapshot{Calls: 140, RunID: "run-a"},
+		originGETCounterSnapshot{Calls: 100, RunID: "run-a"},
+	); ok {
+		t.Fatalf("non-monotonic commandstats accepted: %+v", nonMonotonic)
+	}
+	if nonMonotonic.UpstreamGETs != 0 || nonMonotonic.UpstreamGETsSource != originGETsSourceCommandstats || len(nonMonotonic.Notes) == 0 {
+		t.Fatalf("non-monotonic commandstats did not fail closed: %+v", nonMonotonic)
+	}
+
+	restarted := benchmarkPhase{}
+	restartedValid := applyOriginGETCounterDelta(
+		&restarted,
+		originGETCounterSnapshot{Calls: 100, RunID: "run-a"},
+		originGETCounterSnapshot{Calls: 140, RunID: "run-b"},
+	)
+	if restartedValid {
+		t.Fatalf("changed origin run_id was accepted: %+v", restarted)
+	}
+	if restarted.UpstreamGETs != 0 || restarted.UpstreamGETsSource != originGETsSourceCommandstats || len(restarted.Notes) == 0 {
+		t.Fatalf("changed origin run_id did not fail closed: %+v", restarted)
+	}
+	restartedResult := summarizeWorkloadScenario(workloadScenarioUniform, benchmarkPhase{}, restarted, true, restartedValid)
+	if restartedResult.EvidenceValid || restartedResult.ProvedOriginGETReduction {
+		t.Fatalf("changed origin run_id produced scenario evidence: %+v", restartedResult)
+	}
+
+	missingRunID := benchmarkPhase{}
+	missingRunIDValid := applyOriginGETCounterDelta(
+		&missingRunID,
+		originGETCounterSnapshot{Calls: 100},
+		originGETCounterSnapshot{Calls: 140},
+	)
+	if missingRunIDValid {
+		t.Fatalf("missing origin run_id was accepted: %+v", missingRunID)
+	}
+	if missingRunID.UpstreamGETs != 0 || missingRunID.UpstreamGETsSource != originGETsSourceCommandstats || len(missingRunID.Notes) == 0 {
+		t.Fatalf("missing origin run_id did not fail closed: %+v", missingRunID)
+	}
+	missingRunIDResult := summarizeWorkloadScenario(workloadScenarioUniform, benchmarkPhase{}, missingRunID, true, missingRunIDValid)
+	if missingRunIDResult.EvidenceValid || missingRunIDResult.ProvedOriginGETReduction {
+		t.Fatalf("missing origin run_id produced scenario evidence: %+v", missingRunIDResult)
+	}
+}
+
+func TestPhysicalOriginGETIsolationMatchesDirectAndSlizenEvidence(t *testing.T) {
+	direct := benchmarkPhase{Reads: 100, UpstreamGETs: 100, UpstreamGETsSource: originGETsSourceCommandstats}
+	if !validatePhysicalOriginGETIsolation(&direct, direct.Reads, "direct phase reads") {
+		t.Fatalf("isolated direct evidence rejected: %+v", direct)
+	}
+
+	slizen := benchmarkPhase{
+		UpstreamGETs:             10,
+		UpstreamGETsSource:       originGETsSourceCommandstats,
+		SlizenStatusUpstreamGETs: 10,
+	}
+	if !validatePhysicalOriginGETIsolation(&slizen, slizen.SlizenStatusUpstreamGETs, "Slizen status upstream GET delta") {
+		t.Fatalf("isolated Slizen evidence rejected: %+v", slizen)
+	}
+
+	slizen.UpstreamGETs++
+	if validatePhysicalOriginGETIsolation(&slizen, slizen.SlizenStatusUpstreamGETs, "Slizen status upstream GET delta") {
+		t.Fatalf("unrelated origin traffic was accepted: %+v", slizen)
+	}
+	if len(slizen.Notes) == 0 {
+		t.Fatalf("isolation mismatch did not produce a note: %+v", slizen)
+	}
+}
+
+func TestSameOriginRunIDIsRequiredAcrossComparisonPhases(t *testing.T) {
+	origin := benchmarkPhase{OriginRunID: "run-a"}
+	cold := benchmarkPhase{OriginRunID: "run-a"}
+	hot := benchmarkPhase{OriginRunID: "run-a"}
+	if !validateSameOriginRunID(&origin, &cold, &hot) {
+		t.Fatalf("same origin run_id was rejected: origin=%+v cold=%+v hot=%+v", origin, cold, hot)
+	}
+
+	hot.OriginRunID = "run-b"
+	continuityValid := validateSameOriginRunID(&origin, &cold, &hot)
+	if continuityValid {
+		t.Fatalf("restart between phases was accepted: origin=%+v cold=%+v hot=%+v", origin, cold, hot)
+	}
+	if len(origin.Notes) == 0 || len(cold.Notes) == 0 || len(hot.Notes) == 0 {
+		t.Fatalf("cross-phase restart did not annotate all phases: origin=%+v cold=%+v hot=%+v", origin, cold, hot)
+	}
+	result := summarizeWorkloadScenario(workloadScenarioUniform, origin, hot, true, continuityValid)
+	if result.EvidenceValid || result.ProvedOriginGETReduction {
+		t.Fatalf("cross-phase restart produced evidence: %+v", result)
+	}
+
+	missing := benchmarkPhase{}
+	if validateSameOriginRunID(&origin, &missing) {
+		t.Fatalf("missing cross-phase run_id was accepted: origin=%+v missing=%+v", origin, missing)
+	}
+}
+
+func TestKnownOriginRuntimeVersionFailsClosed(t *testing.T) {
+	for _, version := range []string{"", " ", "unknown", "UNKNOWN"} {
+		if knownOriginRuntimeVersion(version) {
+			t.Fatalf("unknown origin runtime version %q was accepted", version)
+		}
+	}
+	for _, version := range []string{"Valkey 8.1.9", "Redis 7.4.2", "Redis-compatible 1.0"} {
+		if !knownOriginRuntimeVersion(version) {
+			t.Fatalf("known origin runtime version %q was rejected", version)
+		}
 	}
 }
 

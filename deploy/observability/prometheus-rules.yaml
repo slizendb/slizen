@@ -1,0 +1,174 @@
+# Conservative staging defaults. Tune thresholds and evaluation windows against
+# the application's direct-Redis baseline before using these rules in production.
+groups:
+  - name: slizen-staging
+    interval: 30s
+    rules:
+      - alert: SlizenMetricsMissing
+        expr: |
+          absent_over_time(
+            slizen_requests_total{command="GET",result="ok"}[5m]
+          ) == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: No Slizen metrics have been scraped
+          description: >-
+            The pre-initialized GET/ok request series has been absent for at
+            least 5 minutes. This is a global or single-canary signal: if
+            several Slizen targets share Prometheus, one healthy target can
+            suppress it. Alert on each Kubernetes probe or use blackbox
+            monitoring to detect per-target readiness loss and flapping.
+
+      - alert: SlizenProxyErrorRateHigh
+        expr: |
+          (
+            sum by (job, instance) (rate(slizen_requests_total{result="error"}[5m]))
+            /
+            sum by (job, instance) (rate(slizen_requests_total[5m]))
+          ) > 0.01
+          and on (job, instance)
+          sum by (job, instance) (rate(slizen_requests_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Slizen proxy error rate is above 1%
+          description: >-
+            More than 1% of proxy requests have failed for 10 minutes while
+            traffic exceeds 1 request/s. Compare with the direct-Redis baseline
+            and tune this staging threshold before production.
+
+      - alert: SlizenUpstreamErrorRateHigh
+        expr: |
+          (
+            sum by (job, instance) (rate(slizen_upstream_errors_total[5m]))
+            /
+            sum by (job, instance) (rate(slizen_upstream_requests_total[5m]))
+          ) > 0.01
+          and on (job, instance)
+          sum by (job, instance) (rate(slizen_upstream_requests_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Slizen is observing elevated upstream errors
+          description: >-
+            More than 1% of Slizen upstream calls have failed for 10 minutes.
+            Check Redis or Valkey health and the network path; tune the threshold
+            to the staging baseline before production.
+
+      - alert: SlizenGetP99LatencyHigh
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (job, instance, le) (
+              rate(slizen_request_duration_seconds_bucket{command="GET"}[5m])
+            )
+          ) > 0.1
+          and on (job, instance)
+          sum by (job, instance) (
+            rate(slizen_request_duration_seconds_count{command="GET"}[5m])
+          ) > 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Slizen GET p99 latency is above 100 ms
+          description: >-
+            End-to-end GET p99 has exceeded the conservative 100 ms staging
+            default for 15 minutes. Set this threshold from the application's
+            latency budget before production.
+
+      - alert: SlizenUpstreamP99LatencyHigh
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (job, instance, le) (
+              rate(slizen_upstream_duration_seconds_bucket[5m])
+            )
+          ) > 0.1
+          and on (job, instance)
+          sum by (job, instance) (
+            rate(slizen_upstream_duration_seconds_count[5m])
+          ) > 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Redis or Valkey p99 latency through Slizen is above 100 ms
+          description: >-
+            Upstream-call p99 has exceeded the conservative 100 ms staging
+            default for 15 minutes. Diagnose the origin and network path, and
+            tune this threshold to the direct-Redis baseline.
+
+      - alert: SlizenCacheBytePressure
+        expr: |
+          (
+            slizen_cache_bytes
+            /
+            slizen_cache_max_bytes
+          ) > 0.90
+          and on (job, instance)
+          rate(slizen_cache_evictions_total[5m]) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Slizen cache is near its byte limit and evicting
+          description: >-
+            Approximate cache bytes exceed 90% of the configured bound while
+            evictions continue. A full cache alone is expected; tune the
+            combined utilization and churn thresholds for the workload.
+
+      - alert: SlizenCacheEntryPressure
+        expr: |
+          (
+            slizen_cache_entries
+            /
+            slizen_cache_max_entries
+          ) > 0.90
+          and on (job, instance)
+          slizen_cache_max_entries > 0
+          and on (job, instance)
+          rate(slizen_cache_evictions_total[5m]) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Slizen cache is near its entry limit and evicting
+          description: >-
+            Cache entries exceed 90% of the configured non-zero entry bound
+            while evictions continue. Tune this staging default to the expected
+            working set; the byte bound remains active when max entries is zero.
+
+      - alert: SlizenHotnessOversizedTelemetryDropped
+        expr: |
+          increase(slizen_hotness_oversized_observations_dropped_total[15m])
+          > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Slizen skipped oversized-key hotness observations
+          description: >-
+            At least one observation was skipped because the key exceeded the
+            tracking byte limit. Commands still reach Redis or Valkey, but do
+            not treat the audit as complete. This alert works with v0.2.2 and
+            later.
+
+      - alert: SlizenHotnessCapacityTelemetryDropped
+        expr: |
+          increase(slizen_hotness_capacity_observations_dropped_total[15m])
+          > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Slizen skipped hotness observations at tracker capacity
+          description: >-
+            At least one unseen-key observation was skipped so the bounded
+            tracker did not evict protected HOT state. Commands still reach
+            Redis or Valkey, but do not treat the audit as complete. This
+            series and alert require the v0.2.3 candidate or later.

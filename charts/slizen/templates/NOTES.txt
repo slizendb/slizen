@@ -1,11 +1,21 @@
-Slizen is running in {{ .Values.mode }} mode at:
+Slizen is deployed in {{ .Values.mode }} mode at:
   {{ include "slizen.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
 
+{{ if .Values.networkPolicy.enabled -}}
+The chart NetworkPolicy is enabled. Only peers listed in
+networkPolicy.redisIngressPeers can reach RESP; an empty list denies all RESP
+ingress. Slizen v0.2 does not authenticate downstream clients.
+{{ else -}}
+WARNING: the chart NetworkPolicy is disabled. Verify an equivalent platform
+policy before routing any client to this unauthenticated RESP endpoint.
+{{ end -}}
 {{ if .Values.metrics.enabled -}}
 The complete admin API, including metrics, is exposed through the explicitly
 enabled ClusterIP Service:
   {{ include "slizen.fullname" . }}-metrics.{{ .Release.Namespace }}.svc:{{ .Values.metrics.service.port }}
-Restrict this Service with a NetworkPolicy; it is not a metrics-only endpoint.
+Only networkPolicy.metricsIngressPeers are admitted when the chart policy is
+enabled; an empty list denies all admin ingress. This is not a metrics-only
+endpoint.
 Inspect status with:
 {{ else -}}
 The admin API is bound to Pod loopback and has no Service. Inspect it with:

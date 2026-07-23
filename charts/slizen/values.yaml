@@ -3,9 +3,10 @@ replicaCount: 1
 image:
   repository: ghcr.io/slizendb/slizen
   pullPolicy: IfNotPresent
-  # Defaults to Chart.appVersion. Pin a digest in production.
-  tag: ""
-  digest: ""
+  # Main may describe an unreleased candidate. Keep the runnable default pinned
+  # to the latest verified public v0.2 image until a newer digest is published.
+  tag: "0.2.2"
+  digest: "sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -16,20 +17,25 @@ fullnameOverride: ""
 mode: observe
 
 upstream:
+  # Plaintext RESP only in v0.2. Keep this path private or use an external,
+  # separately reviewed local tunnel; TLS-required origins are not supported.
   address: redis.default.svc.cluster.local:6379
   database: 0
   dialTimeout: 2s
   readTimeout: 2s
   writeTimeout: 2s
-  # The chart never creates or renders Redis credentials. When set, the named
-  # Secret may contain username and/or password under the configured keys.
+  # The chart never creates or renders Redis credentials. When name is set,
+  # both keys are required so an auth typo fails closed; use an empty username
+  # value for Redis's default user.
   existingSecret:
     name: ""
     usernameKey: username
     passwordKey: password
 
 proxy:
-  readTimeout: 3s
+  # Idle downstream connection deadline. Keep it above the application's
+  # expected pool-idle/reuse interval to avoid reconnect churn.
+  readTimeout: 5m
   writeTimeout: 3s
   shutdownTimeout: 10s
   maxCommandBytes: 1048576
@@ -90,7 +96,18 @@ service:
   port: 6380
   annotations: {}
 
+# Slizen v0.2 does not authenticate downstream RESP clients. The default
+# NetworkPolicy therefore selects the Slizen Pod and denies all ingress until
+# the operator explicitly lists the application and monitoring peers.
+networkPolicy:
+  enabled: true
+  redisIngressPeers: []
+  metricsIngressPeers: []
+
+# `checksum/config` is chart-owned and rejected here.
 podAnnotations: {}
+# `app.kubernetes.io/name` and `app.kubernetes.io/instance` are chart-owned
+# selector labels and are rejected here.
 podLabels: {}
 
 podSecurityContext:
@@ -128,13 +145,15 @@ probes:
     periodSeconds: 10
     timeoutSeconds: 2
 
-# Keep this above proxy.shutdownTimeout so SIGTERM can drain connections.
+# The chart rejects values that are not strictly above proxy.shutdownTimeout,
+# so Kubernetes leaves time for Slizen to finish its bounded connection drain.
 terminationGracePeriodSeconds: 30
 
 metrics:
   # Enabling metrics requires admin.listen=0.0.0.0:9090 and an explicit
   # admin.allowNetworkAccess=true acknowledgement. The resulting ClusterIP can
-  # reach the complete admin API, so restrict it with your own NetworkPolicy.
+  # reach the complete admin API, so list only the monitoring identities under
+  # networkPolicy.metricsIngressPeers.
   enabled: false
   service:
     port: 9090

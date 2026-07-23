@@ -7,8 +7,22 @@
 {{- if ge (int .Values.proxy.maxMGetKeys) (int .Values.proxy.maxCommandArgs) }}
 {{- fail "proxy.maxMGetKeys must be less than proxy.maxCommandArgs" }}
 {{- end }}
+{{- $proxyReadTimeoutNanoseconds := include "slizen.durationNanoseconds" (list .Values.proxy.readTimeout "proxy.readTimeout") | int64 }}
+{{- $proxyWriteTimeoutNanoseconds := include "slizen.durationNanoseconds" (list .Values.proxy.writeTimeout "proxy.writeTimeout") | int64 }}
+{{- $shutdownTimeoutNanoseconds := include "slizen.durationNanoseconds" (list .Values.proxy.shutdownTimeout "proxy.shutdownTimeout") | int64 }}
+{{- $upstreamDialTimeoutNanoseconds := include "slizen.durationNanoseconds" (list .Values.upstream.dialTimeout "upstream.dialTimeout") | int64 }}
+{{- $upstreamReadTimeoutNanoseconds := include "slizen.durationNanoseconds" (list .Values.upstream.readTimeout "upstream.readTimeout") | int64 }}
+{{- $upstreamWriteTimeoutNanoseconds := include "slizen.durationNanoseconds" (list .Values.upstream.writeTimeout "upstream.writeTimeout") | int64 }}
+{{- $terminationGraceNanoseconds := mul (int64 .Values.terminationGracePeriodSeconds) 1000000000 }}
+{{- if le $terminationGraceNanoseconds $shutdownTimeoutNanoseconds }}
+{{- fail "terminationGracePeriodSeconds must be greater than proxy.shutdownTimeout" }}
+{{- end }}
 {{- $globalMaxItemBytes := int64 .Values.cache.maxBytes }}
 {{- $globalMaxLocalTTL := include "slizen.durationNanoseconds" (list .Values.cache.maxLocalTTL "cache.maxLocalTTL") | int64 }}
+{{- $staleGraceNanoseconds := include "slizen.durationNanoseconds" (list .Values.cache.staleGrace "cache.staleGrace") | int64 }}
+{{- $negativeTTLNanoseconds := include "slizen.durationNanoseconds" (list .Values.cache.negativeTTL "cache.negativeTTL") | int64 }}
+{{- $hotnessWindowNanoseconds := include "slizen.durationNanoseconds" (list .Values.hotness.window "hotness.window") | int64 }}
+{{- $hotnessCooldownNanoseconds := include "slizen.durationNanoseconds" (list .Values.hotness.cooldown "hotness.cooldown") | int64 }}
 {{- $seenPolicyPrefixes := dict }}
 {{- $totalPolicyPrefixBytes := 0 }}
 {{- range $index, $policy := .Values.cache.policies }}

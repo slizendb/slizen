@@ -121,11 +121,34 @@ func TestEnvironmentOverrides(t *testing.T) {
 	}
 }
 
+func TestSecretEnvironmentOverridesPreserveOpaqueBytes(t *testing.T) {
+	t.Setenv("SLIZEN_UPSTREAM_USERNAME", "")
+	t.Setenv("SLIZEN_UPSTREAM_PASSWORD", " password with surrounding space ")
+	t.Setenv("SLIZEN_KEY_HASH_SECRET", " hash secret with surrounding space ")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Upstream.Username != "" {
+		t.Fatalf("upstream username = %q, want explicit empty default-user name", cfg.Upstream.Username)
+	}
+	if cfg.Upstream.Password != " password with surrounding space " {
+		t.Fatalf("upstream password bytes were changed, length = %d", len(cfg.Upstream.Password))
+	}
+	if cfg.Privacy.KeyHashSecret != " hash secret with surrounding space " {
+		t.Fatalf("key hash secret bytes were changed, length = %d", len(cfg.Privacy.KeyHashSecret))
+	}
+}
+
 func TestDefaultsAreObserveFirstWithEphemeralHashSecret(t *testing.T) {
 	first := Default()
 	second := Default()
 	if first.Mode != "observe" {
 		t.Fatalf("default mode = %q, want observe", first.Mode)
+	}
+	if first.Proxy.ReadTimeout != 5*time.Minute {
+		t.Fatalf("default proxy read timeout = %s, want 5m idle deadline", first.Proxy.ReadTimeout)
 	}
 	if first.Privacy.KeyHashSecret == "" || second.Privacy.KeyHashSecret == "" {
 		t.Fatal("default hash secret must be generated")

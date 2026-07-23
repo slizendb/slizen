@@ -3,7 +3,9 @@ name: slizen
 description: Observe-first Slizen proxy for Redis and Valkey staging workloads
 type: application
 version: 0.2.3
-appVersion: "0.2.3"
+# A source-tree release candidate may intentionally default to the previous
+# verified runtime. Post-publish packaging aligns this with the exact digest.
+appVersion: "0.2.2"
 kubeVersion: ">=1.25.0-0"
 home: https://github.com/slizendb/slizen
 sources:

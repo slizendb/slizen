@@ -15,6 +15,7 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,6 +42,9 @@ const (
 	maxWorkloadKeyPrefix   = 128
 	seedPipelineBytes      = 4 << 20
 	maxStatusResponseBytes = 64 << 10
+
+	originGETsSourceCommandstats = "origin_info_commandstats"
+	originGETsSourceUnavailable  = "unavailable"
 )
 
 type benchmarkResult struct {
@@ -57,6 +61,7 @@ type benchmarkResult struct {
 	Phases               []benchmarkPhase `json:"phases"`
 	UpstreamGetReduction float64          `json:"upstream_get_reduction_percent"`
 	CacheHitRatio        float64          `json:"cache_hit_ratio_percent"`
+	EvidenceValid        bool             `json:"evidence_valid"`
 	ProvedReduction      bool             `json:"proved_reduction"`
 	Notes                []string         `json:"notes,omitempty"`
 	StatusBefore         statusSnapshot   `json:"status_before"`
@@ -88,6 +93,9 @@ type benchmarkPhase struct {
 	WriteOrderingWaitLatency *latencyDistribution `json:"write_ordering_wait_latency,omitempty"`
 	FinalValidationLatency   *latencyDistribution `json:"final_validation_latency,omitempty"`
 	UpstreamGETs             uint64               `json:"upstream_gets"`
+	UpstreamGETsSource       string               `json:"upstream_gets_source"`
+	OriginRunID              string               `json:"origin_run_id"`
+	SlizenStatusUpstreamGETs uint64               `json:"slizen_status_upstream_gets"`
 	CacheHits                uint64               `json:"cache_hits"`
 	CacheMisses              uint64               `json:"cache_misses"`
 	CacheMissesPolicyBypass  uint64               `json:"cache_misses_policy_bypass"`
@@ -188,6 +196,12 @@ type workloadValues struct {
 type workloadKeyState struct {
 	mu      sync.RWMutex
 	version uint64
+}
+
+type originGETCounterSnapshot struct {
+	Calls uint64
+	RunID string
+	Err   error
 }
 
 func newWorkloadValues(keys []string, size int) workloadValues {
@@ -477,6 +491,7 @@ func runWorkloadBenchmark(cfg workloadConfig) (workloadBenchmarkResult, error) {
 	})
 	defer origin.Close()
 	versions, versionErr := collectRuntimeVersions(status, origin)
+	runtimeEvidenceValid := versionErr == nil && knownOriginRuntimeVersion(versions.Origin)
 
 	result := workloadBenchmarkResult{
 		Name:              "Slizen Release Workload Benchmark",
@@ -503,6 +518,7 @@ func runWorkloadBenchmark(cfg workloadConfig) (workloadBenchmarkResult, error) {
 			"read_latency and write_latency measure the Redis command after per-key ordering is acquired; read_ordering_wait_latency and write_ordering_wait_latency report that wait separately; final_validation_latency has no ordering wait",
 			"read_latency combines cache hits and misses because process-global status counters cannot attribute an individual latency sample to a cache outcome",
 			"termination_reason identifies whether measured operation issuance reached the request or duration limit; final validation runs afterward",
+			"upstream_gets is the physical origin cmdstat_get calls delta from INFO commandstats; slizen_status_upstream_gets preserves the Slizen logical delta for isolation checks",
 		},
 	}
 	if versionErr != nil {
@@ -519,11 +535,16 @@ func runWorkloadBenchmark(cfg workloadConfig) (workloadBenchmarkResult, error) {
 			return workloadBenchmarkResult{}, fmt.Errorf("seed %s workload: %w", scenario, err)
 		}
 
+		originGETsBefore := readOriginGETCounter(origin)
 		originPhase, err := runRedisWorkload("origin direct", cfg.OriginAddr, keys, values, scenario, cfg)
 		if err != nil {
 			return workloadBenchmarkResult{}, fmt.Errorf("run %s origin phase: %w", scenario, err)
 		}
-		originPhase.UpstreamGETs = originPhase.Reads
+		originGETsAfter := readOriginGETCounter(origin)
+		originPhysicalEvidenceValid := applyOriginGETCounterDelta(&originPhase, originGETsBefore, originGETsAfter)
+		if originPhysicalEvidenceValid {
+			originPhysicalEvidenceValid = validatePhysicalOriginGETIsolation(&originPhase, originPhase.Reads, "direct phase reads")
+		}
 		if err := seedWorkloadKeys(context.Background(), origin, keys, values); err != nil {
 			return workloadBenchmarkResult{}, fmt.Errorf("reset %s workload before Slizen phase: %w", scenario, err)
 		}
@@ -541,7 +562,9 @@ func runWorkloadBenchmark(cfg workloadConfig) (workloadBenchmarkResult, error) {
 			closeErr := closeWorkloadClients(proxyClients)
 			return workloadBenchmarkResult{}, errors.Join(err, closeErr)
 		}
+		slizenOriginGETsBefore := readOriginGETCounter(origin)
 		slizenPhase, err := runRedisWorkloadWithClients("slizen", cfg.ProxyAddr, proxyClients, keys, values, scenario, cfg)
+		slizenOriginGETsAfter := readOriginGETCounter(origin)
 		closeErr := closeWorkloadClients(proxyClients)
 		if err != nil {
 			err = fmt.Errorf("run %s Slizen phase: %w", scenario, err)
@@ -554,7 +577,25 @@ func runWorkloadBenchmark(cfg workloadConfig) (workloadBenchmarkResult, error) {
 			return workloadBenchmarkResult{}, err
 		}
 		statusEvidenceValid := applyWorkloadStatusDelta(&slizenPhase, before, after)
-		result.Scenarios = append(result.Scenarios, summarizeWorkloadScenario(scenario, originPhase, slizenPhase, statusEvidenceValid))
+		slizenPhysicalEvidenceValid := applyOriginGETCounterDelta(&slizenPhase, slizenOriginGETsBefore, slizenOriginGETsAfter)
+		if slizenPhysicalEvidenceValid {
+			slizenPhysicalEvidenceValid = validatePhysicalOriginGETIsolation(
+				&slizenPhase,
+				slizenPhase.SlizenStatusUpstreamGETs,
+				"Slizen status upstream GET delta",
+			)
+		}
+		crossPhaseOriginContinuityValid := validateSameOriginRunID(&originPhase, &slizenPhase)
+		physicalEvidenceValid := originPhysicalEvidenceValid && slizenPhysicalEvidenceValid
+		physicalEvidenceValid = physicalEvidenceValid && crossPhaseOriginContinuityValid
+		physicalEvidenceValid = physicalEvidenceValid && runtimeEvidenceValid
+		result.Scenarios = append(result.Scenarios, summarizeWorkloadScenario(
+			scenario,
+			originPhase,
+			slizenPhase,
+			statusEvidenceValid,
+			physicalEvidenceValid,
+		))
 	}
 	result.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 	return result, nil
@@ -919,8 +960,13 @@ func deterministicWorkloadValue(seed int64, operationIndex, stream uint64) uint6
 	return value ^ (value >> 31)
 }
 
-func summarizeWorkloadScenario(name string, origin, slizen benchmarkPhase, statusEvidenceValid bool) workloadScenarioResult {
-	evidenceValid := origin.Failures == 0 && slizen.Failures == 0 && origin.ValueMismatches == 0 && slizen.ValueMismatches == 0 && statusEvidenceValid
+func summarizeWorkloadScenario(name string, origin, slizen benchmarkPhase, statusEvidenceValid, physicalEvidenceValid bool) workloadScenarioResult {
+	evidenceValid := origin.Failures == 0 &&
+		slizen.Failures == 0 &&
+		origin.ValueMismatches == 0 &&
+		slizen.ValueMismatches == 0 &&
+		statusEvidenceValid &&
+		physicalEvidenceValid
 	reduction := 0.0
 	cacheHitRatio := 0.0
 	if evidenceValid {
@@ -937,7 +983,10 @@ func summarizeWorkloadScenario(name string, origin, slizen benchmarkPhase, statu
 		OriginGETReductionPercent: reduction,
 		CacheHitRatioPercent:      cacheHitRatio,
 		EvidenceValid:             evidenceValid,
-		ProvedOriginGETReduction:  evidenceValid && reduction > 0 && slizen.CacheHits > 0 && slizen.UpstreamGETs < slizen.Reads,
+		ProvedOriginGETReduction: evidenceValid &&
+			reduction > 0 &&
+			slizen.CacheHits > 0 &&
+			slizen.UpstreamGETs < slizen.Reads,
 	}
 	if origin.Failures > 0 || slizen.Failures > 0 {
 		result.Notes = append(result.Notes, "origin GET reduction was suppressed because one or both phases recorded failed operations")
@@ -946,7 +995,10 @@ func summarizeWorkloadScenario(name string, origin, slizen benchmarkPhase, statu
 		result.Notes = append(result.Notes, "origin GET reduction was suppressed because one or both phases returned an unexpected value")
 	}
 	if !statusEvidenceValid {
-		result.Notes = append(result.Notes, "origin GET reduction was suppressed because Slizen process-global counters did not provide isolated, monotonic evidence")
+		result.Notes = append(result.Notes, "origin GET reduction was suppressed because Slizen logical process-global counters did not provide isolated, monotonic evidence")
+	}
+	if !physicalEvidenceValid {
+		result.Notes = append(result.Notes, "origin GET reduction was suppressed because INFO commandstats did not provide isolated, monotonic physical GET evidence")
 	}
 	if !result.ProvedOriginGETReduction {
 		result.Notes = append(result.Notes, "this run did not prove origin GET reduction for the scenario")
@@ -955,7 +1007,12 @@ func summarizeWorkloadScenario(name string, origin, slizen benchmarkPhase, statu
 }
 
 func workloadOriginGETReduction(origin, slizen benchmarkPhase) float64 {
-	if origin.Failures > 0 || slizen.Failures > 0 || origin.Reads == 0 || slizen.Reads == 0 {
+	if origin.Failures > 0 ||
+		slizen.Failures > 0 ||
+		origin.Reads == 0 ||
+		slizen.Reads == 0 ||
+		origin.UpstreamGETsSource != originGETsSourceCommandstats ||
+		slizen.UpstreamGETsSource != originGETsSourceCommandstats {
 		return 0
 	}
 	originRate := float64(origin.UpstreamGETs) / float64(origin.Reads)
@@ -969,6 +1026,178 @@ func workloadOriginGETReduction(origin, slizen benchmarkPhase) float64 {
 func purgeAllBenchmarkCache(adminURL string) error {
 	_, err := httpPost(strings.TrimRight(adminURL, "/")+"/v1/cache/purge", []byte(`{}`))
 	return err
+}
+
+func readOriginGETCounter(origin *redis.Client) originGETCounterSnapshot {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	serverBefore, err := origin.Info(ctx, "server").Result()
+	if err != nil {
+		return originGETCounterSnapshot{Err: fmt.Errorf("INFO server before commandstats: %w", err)}
+	}
+	runIDBefore, err := parseOriginRunID(serverBefore)
+	if err != nil {
+		return originGETCounterSnapshot{Err: err}
+	}
+	info, err := origin.Info(ctx, "commandstats").Result()
+	if err != nil {
+		return originGETCounterSnapshot{Err: fmt.Errorf("INFO commandstats: %w", err)}
+	}
+	calls, err := parseOriginGETCalls(info)
+	if err != nil {
+		return originGETCounterSnapshot{Err: err}
+	}
+	serverAfter, err := origin.Info(ctx, "server").Result()
+	if err != nil {
+		return originGETCounterSnapshot{Err: fmt.Errorf("INFO server after commandstats: %w", err)}
+	}
+	runIDAfter, err := parseOriginRunID(serverAfter)
+	if err != nil {
+		return originGETCounterSnapshot{Err: err}
+	}
+	if runIDAfter != runIDBefore {
+		return originGETCounterSnapshot{Err: errors.New("origin run_id changed while reading INFO commandstats")}
+	}
+	return originGETCounterSnapshot{Calls: calls, RunID: runIDBefore}
+}
+
+func parseOriginGETCalls(info string) (uint64, error) {
+	sawCommandstats := false
+	sawGET := false
+	var calls uint64
+	for _, rawLine := range strings.Split(info, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(line, "#") {
+			section := strings.TrimSpace(strings.TrimPrefix(line, "#"))
+			if strings.EqualFold(section, "Commandstats") {
+				sawCommandstats = true
+			}
+			continue
+		}
+		if !strings.HasPrefix(line, "cmdstat_get:") {
+			continue
+		}
+		if sawGET {
+			return 0, errors.New("origin INFO commandstats included duplicate cmdstat_get entries")
+		}
+		sawGET = true
+		fields := strings.Split(strings.TrimPrefix(line, "cmdstat_get:"), ",")
+		foundCalls := false
+		for _, field := range fields {
+			name, value, ok := strings.Cut(strings.TrimSpace(field), "=")
+			if !ok || name != "calls" {
+				continue
+			}
+			parsed, err := strconv.ParseUint(value, 10, 64)
+			if err != nil {
+				return 0, fmt.Errorf("parse origin cmdstat_get calls: %w", err)
+			}
+			calls = parsed
+			foundCalls = true
+			break
+		}
+		if !foundCalls {
+			return 0, errors.New("origin INFO commandstats cmdstat_get entry did not include calls")
+		}
+	}
+	if !sawCommandstats {
+		return 0, errors.New("origin INFO response did not include a Commandstats section")
+	}
+	return calls, nil
+}
+
+func parseOriginRunID(info string) (string, error) {
+	for _, rawLine := range strings.Split(info, "\n") {
+		line := strings.TrimSpace(rawLine)
+		name, value, ok := strings.Cut(line, ":")
+		if ok && name == "run_id" {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				break
+			}
+			return value, nil
+		}
+	}
+	return "", errors.New("origin INFO server did not include run_id")
+}
+
+func applyOriginGETCounterDelta(phase *benchmarkPhase, before, after originGETCounterSnapshot) bool {
+	phase.UpstreamGETs = 0
+	phase.UpstreamGETsSource = originGETsSourceCommandstats
+	if before.Err != nil {
+		phase.UpstreamGETsSource = originGETsSourceUnavailable
+		phase.Notes = append(phase.Notes, fmt.Sprintf(
+			"physical origin GET evidence is unavailable before the phase: %v",
+			before.Err,
+		))
+		return false
+	}
+	if after.Err != nil {
+		phase.UpstreamGETsSource = originGETsSourceUnavailable
+		phase.Notes = append(phase.Notes, fmt.Sprintf(
+			"physical origin GET evidence is unavailable after the phase: %v",
+			after.Err,
+		))
+		return false
+	}
+	if before.RunID == "" || after.RunID == "" {
+		phase.Notes = append(phase.Notes, "origin run_id was unavailable; restart continuity could not be verified")
+		return false
+	}
+	if after.RunID != before.RunID {
+		phase.Notes = append(phase.Notes, "origin run_id changed during the phase; restart invalidated physical evidence")
+		return false
+	}
+	if after.Calls < before.Calls {
+		phase.Notes = append(phase.Notes, fmt.Sprintf(
+			"origin INFO commandstats cmdstat_get calls decreased from %d to %d; reset or restart invalidated physical evidence",
+			before.Calls,
+			after.Calls,
+		))
+		return false
+	}
+	phase.UpstreamGETs = after.Calls - before.Calls
+	phase.OriginRunID = before.RunID
+	return true
+}
+
+func validateSameOriginRunID(phases ...*benchmarkPhase) bool {
+	if len(phases) < 2 {
+		return true
+	}
+	expected := phases[0].OriginRunID
+	if expected == "" {
+		for _, phase := range phases {
+			phase.Notes = append(phase.Notes, "origin run_id continuity across comparison phases could not be verified")
+		}
+		return false
+	}
+	for _, phase := range phases[1:] {
+		if phase.OriginRunID == expected {
+			continue
+		}
+		for _, compared := range phases {
+			compared.Notes = append(compared.Notes, "origin run_id changed between comparison phases; restart invalidated reduction evidence")
+		}
+		return false
+	}
+	return true
+}
+
+func validatePhysicalOriginGETIsolation(phase *benchmarkPhase, expected uint64, expectation string) bool {
+	if phase.UpstreamGETsSource != originGETsSourceCommandstats {
+		return false
+	}
+	if phase.UpstreamGETs == expected {
+		return true
+	}
+	phase.Notes = append(phase.Notes, fmt.Sprintf(
+		"physical origin GET counter changed by %d while %s was %d; retries or unrelated origin traffic invalidated isolation",
+		phase.UpstreamGETs,
+		expectation,
+		expected,
+	))
+	return false
 }
 
 func collectRuntimeVersions(status statusSnapshot, origin *redis.Client) (runtimeVersions, error) {
@@ -992,6 +1221,11 @@ func collectRuntimeVersions(status statusSnapshot, origin *redis.Client) (runtim
 		return versions, errors.New("origin runtime version unavailable: INFO server did not include a version")
 	}
 	return versions, nil
+}
+
+func knownOriginRuntimeVersion(version string) bool {
+	version = strings.TrimSpace(version)
+	return version != "" && !strings.EqualFold(version, "unknown")
 }
 
 func parseOriginVersion(info string) string {
@@ -1119,6 +1353,7 @@ func runHotKeyBenchmark(originAddr, proxyAddr, adminURL, key, value string, warm
 		return benchmarkResult{}, fmt.Errorf("purge benchmark key before origin phase: %w", err)
 	}
 	versions, versionErr := collectRuntimeVersions(before, origin)
+	runtimeEvidenceValid := versionErr == nil && knownOriginRuntimeVersion(versions.Origin)
 
 	result := benchmarkResult{
 		Name:            "Slizen Hot Key Benchmark",
@@ -1137,11 +1372,16 @@ func runHotKeyBenchmark(originAddr, proxyAddr, adminURL, key, value string, warm
 		result.Notes = append(result.Notes, versionErr.Error())
 	}
 
+	originGETsBefore := readOriginGETCounter(origin)
 	originPhase, err := runRedisGetLoad("origin direct", originAddr, key, value, concurrency, requests, duration)
 	if err != nil {
 		return benchmarkResult{}, err
 	}
-	originPhase.UpstreamGETs = originPhase.Requests
+	originGETsAfter := readOriginGETCounter(origin)
+	originPhysicalEvidenceValid := applyOriginGETCounterDelta(&originPhase, originGETsBefore, originGETsAfter)
+	if originPhysicalEvidenceValid {
+		originPhysicalEvidenceValid = validatePhysicalOriginGETIsolation(&originPhase, originPhase.Requests, "direct phase reads")
+	}
 	result.Phases = append(result.Phases, originPhase)
 
 	if err := purgeBenchmarkCache(adminURL, key); err != nil {
@@ -1152,7 +1392,9 @@ func runHotKeyBenchmark(originAddr, proxyAddr, adminURL, key, value string, warm
 	if err != nil {
 		return benchmarkResult{}, err
 	}
+	coldOriginGETsBefore := readOriginGETCounter(origin)
 	coldPhase, err := runRedisGetLoad("slizen cold", proxyAddr, key, value, concurrency, coldRequests, minDuration(duration, maxDuration(500*time.Millisecond, warmup)))
+	coldOriginGETsAfter := readOriginGETCounter(origin)
 	if err != nil {
 		return benchmarkResult{}, err
 	}
@@ -1160,7 +1402,15 @@ func runHotKeyBenchmark(originAddr, proxyAddr, adminURL, key, value string, warm
 	if err != nil {
 		return benchmarkResult{}, err
 	}
-	applyStatusDelta(&coldPhase, coldBefore, coldAfter)
+	coldStatusEvidenceValid := applyHotKeyStatusDelta(&coldPhase, coldBefore, coldAfter)
+	coldPhysicalEvidenceValid := applyOriginGETCounterDelta(&coldPhase, coldOriginGETsBefore, coldOriginGETsAfter)
+	if coldPhysicalEvidenceValid {
+		coldPhysicalEvidenceValid = validatePhysicalOriginGETIsolation(
+			&coldPhase,
+			coldPhase.SlizenStatusUpstreamGETs,
+			"Slizen status upstream GET delta",
+		)
+	}
 	coldPhase.Notes = append(coldPhase.Notes, "cold phase caps requests to avoid intentionally warming the key")
 	if before.Mode == "observe" {
 		coldPhase.Name = "slizen observe"
@@ -1180,7 +1430,9 @@ func runHotKeyBenchmark(originAddr, proxyAddr, adminURL, key, value string, warm
 	if err != nil {
 		return benchmarkResult{}, err
 	}
+	hotOriginGETsBefore := readOriginGETCounter(origin)
 	hotPhase, err := runRedisGetLoad("slizen hot", proxyAddr, key, value, concurrency, requests, duration)
+	hotOriginGETsAfter := readOriginGETCounter(origin)
 	if err != nil {
 		return benchmarkResult{}, err
 	}
@@ -1188,13 +1440,43 @@ func runHotKeyBenchmark(originAddr, proxyAddr, adminURL, key, value string, warm
 	if err != nil {
 		return benchmarkResult{}, err
 	}
-	applyStatusDelta(&hotPhase, hotBefore, hotAfter)
+	hotStatusEvidenceValid := applyHotKeyStatusDelta(&hotPhase, hotBefore, hotAfter)
+	hotPhysicalEvidenceValid := applyOriginGETCounterDelta(&hotPhase, hotOriginGETsBefore, hotOriginGETsAfter)
+	if hotPhysicalEvidenceValid {
+		hotPhysicalEvidenceValid = validatePhysicalOriginGETIsolation(
+			&hotPhase,
+			hotPhase.SlizenStatusUpstreamGETs,
+			"Slizen status upstream GET delta",
+		)
+	}
 	hotPhase.Notes = append(hotPhase.Notes, warmNotes...)
 	result.Phases = append(result.Phases, hotPhase)
 
-	result.CacheHitRatio = hotPhase.CacheHitRatio
-	result.UpstreamGetReduction = upstreamReduction(originPhase, hotPhase)
-	result.ProvedReduction = originPhase.Failures == 0 && hotPhase.Failures == 0 && originPhase.ValueMismatches == 0 && hotPhase.ValueMismatches == 0 && result.UpstreamGetReduction > 0 && result.CacheHitRatio > 0 && hotPhase.UpstreamGETs < hotPhase.Requests
+	crossPhaseOriginContinuityValid := validateSameOriginRunID(&originPhase, &coldPhase, &hotPhase)
+	result.EvidenceValid = runtimeEvidenceValid &&
+		originPhysicalEvidenceValid &&
+		coldStatusEvidenceValid &&
+		coldPhysicalEvidenceValid &&
+		hotStatusEvidenceValid &&
+		hotPhysicalEvidenceValid &&
+		crossPhaseOriginContinuityValid &&
+		originPhase.Failures == 0 &&
+		coldPhase.Failures == 0 &&
+		hotPhase.Failures == 0 &&
+		originPhase.ValueMismatches == 0 &&
+		coldPhase.ValueMismatches == 0 &&
+		hotPhase.ValueMismatches == 0
+	if result.EvidenceValid {
+		result.CacheHitRatio = hotPhase.CacheHitRatio
+		result.UpstreamGetReduction = upstreamReduction(originPhase, hotPhase)
+	}
+	result.ProvedReduction = result.EvidenceValid &&
+		result.UpstreamGetReduction > 0 &&
+		result.CacheHitRatio > 0 &&
+		hotPhase.UpstreamGETs < hotPhase.Requests
+	if !result.EvidenceValid {
+		result.Notes = append(result.Notes, "benchmark evidence is invalid because physical origin commandstats or Slizen logical isolation checks failed")
+	}
 	if !result.ProvedReduction {
 		result.Notes = append(result.Notes, "benchmark did not prove upstream GET reduction for this run/configuration")
 	}
@@ -1336,7 +1618,7 @@ func warmSlizenKey(proxyAddr, adminURL, key string, concurrency int, warmup time
 }
 
 func applyStatusDelta(phase *benchmarkPhase, before, after statusSnapshot) {
-	phase.UpstreamGETs = subtractUint64(after.UpstreamGETsTotal, before.UpstreamGETsTotal)
+	phase.SlizenStatusUpstreamGETs = subtractUint64(after.UpstreamGETsTotal, before.UpstreamGETsTotal)
 	phase.CacheHits = subtractUint64(after.CacheHitsTotal, before.CacheHitsTotal)
 	phase.CacheMisses = subtractUint64(after.CacheMissesTotal, before.CacheMissesTotal)
 	phase.CacheMissesPolicyBypass = subtractUint64(after.CacheMissesPolicyBypass, before.CacheMissesPolicyBypass)
@@ -1348,9 +1630,53 @@ func applyStatusDelta(phase *benchmarkPhase, before, after statusSnapshot) {
 	}
 }
 
+func applyHotKeyStatusDelta(phase *benchmarkPhase, before, after statusSnapshot) bool {
+	if reason := invalidStatusDeltaReason(before, after); reason != "" {
+		phase.SlizenStatusUpstreamGETs = 0
+		phase.CacheHits = 0
+		phase.CacheMisses = 0
+		phase.CacheMissesPolicyBypass = 0
+		phase.CacheMissesNotAdmitted = 0
+		phase.CacheMissesNotPresent = 0
+		phase.CacheHitRatio = 0
+		phase.Notes = append(phase.Notes, reason)
+		return false
+	}
+
+	applyStatusDelta(phase, before, after)
+	expectedRequests := phase.Requests + phase.Failures
+	observedRequests := after.RequestsTotal - before.RequestsTotal
+	evidenceValid := true
+	if observedRequests != expectedRequests {
+		phase.Notes = append(phase.Notes, fmt.Sprintf(
+			"Slizen process-global request counter changed by %d during %d benchmark operations; run Slizen quiescently and exclusively",
+			observedRequests,
+			expectedRequests,
+		))
+		evidenceValid = false
+	}
+	if phase.Failures == 0 && phase.CacheHits+phase.CacheMisses != phase.Requests {
+		phase.Notes = append(phase.Notes, fmt.Sprintf(
+			"Slizen cache counters recorded %d GET decisions during %d benchmark reads; process-global evidence is not isolated",
+			phase.CacheHits+phase.CacheMisses,
+			phase.Requests,
+		))
+		evidenceValid = false
+	}
+	if phase.Failures == 0 && phase.SlizenStatusUpstreamGETs > phase.Requests {
+		phase.Notes = append(phase.Notes, fmt.Sprintf(
+			"Slizen upstream GET counter changed by %d during %d benchmark reads; process-global evidence is not isolated",
+			phase.SlizenStatusUpstreamGETs,
+			phase.Requests,
+		))
+		evidenceValid = false
+	}
+	return evidenceValid
+}
+
 func applyWorkloadStatusDelta(phase *benchmarkPhase, before, after statusSnapshot) bool {
 	if reason := invalidStatusDeltaReason(before, after); reason != "" {
-		phase.UpstreamGETs = 0
+		phase.SlizenStatusUpstreamGETs = 0
 		phase.CacheHits = 0
 		phase.CacheMisses = 0
 		phase.CacheMissesPolicyBypass = 0
@@ -1381,10 +1707,10 @@ func applyWorkloadStatusDelta(phase *benchmarkPhase, before, after statusSnapsho
 		))
 		evidenceValid = false
 	}
-	if phase.Failures == 0 && phase.UpstreamGETs > phase.Reads {
+	if phase.Failures == 0 && phase.SlizenStatusUpstreamGETs > phase.Reads {
 		phase.Notes = append(phase.Notes, fmt.Sprintf(
 			"Slizen upstream GET counter changed by %d during %d benchmark reads; process-global evidence is not isolated",
-			phase.UpstreamGETs,
+			phase.SlizenStatusUpstreamGETs,
 			phase.Reads,
 		))
 		evidenceValid = false
@@ -1422,7 +1748,14 @@ func invalidStatusDeltaReason(before, after statusSnapshot) string {
 }
 
 func upstreamReduction(origin, hot benchmarkPhase) float64 {
-	if origin.Requests == 0 || hot.Requests == 0 || origin.Failures > 0 || hot.Failures > 0 || origin.ValueMismatches > 0 || hot.ValueMismatches > 0 {
+	if origin.Requests == 0 ||
+		hot.Requests == 0 ||
+		origin.Failures > 0 ||
+		hot.Failures > 0 ||
+		origin.ValueMismatches > 0 ||
+		hot.ValueMismatches > 0 ||
+		origin.UpstreamGETsSource != originGETsSourceCommandstats ||
+		hot.UpstreamGETsSource != originGETsSourceCommandstats {
 		return 0
 	}
 	originRate := float64(origin.UpstreamGETs) / float64(origin.Requests)
@@ -1457,6 +1790,7 @@ func printBenchmarkText(w io.Writer, result benchmarkResult) {
 	fmt.Fprintln(w, "Result:")
 	fmt.Fprintf(w, "upstream_get_reduction: %.1f%%\n", result.UpstreamGetReduction)
 	fmt.Fprintf(w, "cache_hit_ratio: %.1f%%\n", result.CacheHitRatio)
+	fmt.Fprintf(w, "evidence_valid: %t\n", result.EvidenceValid)
 	fmt.Fprintf(w, "proved_reduction: %t\n", result.ProvedReduction)
 	for _, note := range result.Notes {
 		fmt.Fprintf(w, "note: %s\n", note)

@@ -68,11 +68,11 @@ Wall-clock duration can still change how much of that prefix completes. For clos
 For each selected scenario, the harness:
 
 1. Generates bounded keys and deterministic fixed-size, key-and-write-version values and seeds generation zero directly into the origin.
-2. Runs the deterministic workload directly against the origin.
+2. Brackets the deterministic direct-origin workload with Redis/Valkey `INFO server` and `INFO commandstats` snapshots.
 3. Validates the final generation of every written key, then resets the origin dataset to generation zero.
 4. Initializes all benchmark client connections, then purges both disposable Slizen cache tiers.
-5. Runs the same deterministic workload shape through Slizen and validates every written key's final generation.
-6. Reads Slizen counters before and after the proxy phase.
+5. Brackets the same deterministic workload through Slizen with the same origin snapshots and validates every written key's final generation.
+6. Reads Slizen counters before and after the proxy phase, then requires the physical origin `cmdstat_get:calls` delta to equal the logical Slizen upstream-GET delta.
 
 Operations for the same key are ordered by the harness: GETs may remain concurrent with other GETs, while a SET and its surrounding reads cannot overlap. Every successful read is compared with the exact generation expected at that point. This makes a cached pre-write generation a value mismatch instead of a valid hit. Operations on different keys remain concurrent.
 
@@ -85,23 +85,46 @@ The JSON result includes:
 - generated `operation_attempts` and `termination_reason`, which distinguish request-bound from duration-bound phases;
 - `value_mismatches` for successful GET responses that did not match the expected key and write generation;
 - `validation_reads`, `validation_failures`, and `validation_mismatches` for the final post-write generation check;
-- origin GET reduction normalized per successful GET;
+- physical origin GET reduction normalized per successful GET, with
+  `upstream_gets_source="origin_info_commandstats"`;
+- the non-empty `origin_run_id` used to prove one origin process across direct
+  and Slizen phases;
+- `slizen_status_upstream_gets`, the logical `/v1/status` delta retained only
+  for isolation and retry/unrelated-traffic detection;
 - Slizen cache hit ratio from `/v1/status` counter deltas;
 - cache miss deltas attributed to the fixed `policy_bypass`, `not_admitted`, and `not_present` reasons;
 - Slizen CLI and daemon versions, origin version, and the benchmark CLI's Go, operating system, and architecture information.
 - an `evidence_valid` flag and notes explaining any failed, mismatched, non-isolated, reset, or restarted measurement.
 
-The origin version is read with `INFO server`. If the origin ACL denies that command or the version is absent, the field is `unknown` and the result records a note instead of failing the workload.
+The origin version and `run_id` are read with `INFO server`; physical GET calls
+come from `INFO commandstats` `cmdstat_get:calls`. The benchmark/operator origin
+identity therefore needs those read-only INFO permissions; Slizen's runtime
+identity does not. Missing INFO data, a counter decrease, a changed/missing
+`run_id` within or between compared phases, or a physical GET delta different
+from the expected direct reads/Slizen logical delta makes evidence fail closed.
+An empty or `unknown` origin runtime version also makes evidence fail closed,
+even if later commandstats snapshots succeed. Do not use `CONFIG RESETSTAT`
+during a run.
 
-`origin_get_reduction_percent` can be negative if a valid run observes more origin GETs per successful read through Slizen than in the direct phase. `proved_origin_get_reduction` is true only when the measured proxy phase has cache hits, a positive reduction, no failed operations, zero value mismatches, monotonic daemon identity/counters, and an exact process-global request delta. Any stale-generation, cross-key, truncated, or corrupted GET payload invalidates the evidence instead of being counted as success. Any unrelated traffic through the same Slizen process also invalidates the reduction evidence instead of being silently attributed to the benchmark. A zero or false result is valid evidence, especially for uniform, write-heavy, short, or `observe`-mode runs.
+`origin_get_reduction_percent` can be negative if a valid run observes more
+physical origin GETs per successful read through Slizen than in the direct
+phase. `proved_origin_get_reduction` is true only when the measured proxy phase
+has cache hits, a positive reduction, no failed operations, zero value
+mismatches, one continuous origin `run_id`, isolated physical commandstats, and
+isolated monotonic Slizen logical counters. Any stale-generation, cross-key,
+truncated, or corrupted GET payload invalidates the evidence instead of being
+counted as success. Retries or unrelated GET traffic also invalidate the
+physical/logical equality rather than being silently attributed to the
+benchmark. A zero or false result is valid evidence, especially for uniform,
+write-heavy, short, or `observe`-mode runs.
 
 The top-level phase and scenario p50/p95/p99 fields remain mixed end-to-end aggregate distributions for schema compatibility. Use the command and ordering-wait objects to distinguish Redis round-trip time from harness serialization. Slizen read command latency still combines cache hits and misses: `/v1/status` provides phase-wide hit and attributed-miss counter deltas, not a per-request cache outcome that can be joined safely to individual latency samples. A latency object is omitted when its operation class has no successful samples; this keeps the workload-only objects out of `benchmark hotkey` JSON. Compare runs only when value size, ratio, concurrency, limits, termination reason, scenario, seed, Slizen configuration, and runtime environment match.
 
 ### v0.2.3 release-candidate local repeats
 
-Five local Docker repeats used the unchanged cold, request-bound `skew-99-1` workload with seed 42, 1,000 keys, 100,000 generated operations per phase, a 95/5 read/write mix, 128-byte values, and concurrency 32. Every direct phase made `94,961` origin GETs. Slizen made `798`–`803`, a `99.154390%`–`99.159655%` reduction, with a `99.121745%`–`99.151231%` cache-hit ratio. Every phase reached the request limit with zero request failures, value mismatches, final-validation failures, and final-validation mismatches.
+Five local Docker repeats used the unchanged cold, request-bound `skew-99-1` workload with seed 42, 1,000 keys, 100,000 generated operations per phase, a 95/5 read/write mix, 128-byte values, and concurrency 32. Every direct phase had `94,961` successful GETs. Slizen recorded `798`–`803` logical upstream GET calls, a `99.154390%`–`99.159655%` proxy-side avoidance estimate, with a `99.121745%`–`99.151231%` cache-hit ratio. Every phase reached the request limit with zero request failures, value mismatches, final-validation failures, and final-validation mismatches. These historical repeats predate origin `INFO commandstats` capture and therefore do not prove physical wire-command volume under retries.
 
-Slizen read p99 was `1.175`–`1.251 ms`, while direct read p99 was `0.986`–`1.042 ms`. These results support a narrow origin-load statement for this exact local workload; they do not establish that Slizen is faster, guarantee 99% reduction for another distribution, or replace tagged immutable-image evidence. v0.2.3 is still a release candidate, and publication must regenerate the bundle from the exact image digest.
+Slizen read p99 was `1.175`–`1.251 ms`, while direct read p99 was `0.986`–`1.042 ms`. These results support only a narrow logical upstream-demand estimate for this exact local workload; they do not establish physical origin reduction, show that Slizen is faster, guarantee 99% reduction for another distribution, or replace tagged immutable-image evidence. v0.2.3 is still a release candidate, and publication must regenerate the bundle from the exact image digest with commandstats-backed evidence.
 
 ### Resource bounds
 
@@ -144,7 +167,11 @@ make benchmark
 make demo-report
 ```
 
-`benchmark hotkey` runs `origin direct`, `slizen cold`, and `slizen hot` phases. It reports client latency plus cache hits, misses, and origin GET reduction from `/v1/status`. Its JSON schema remains additive-compatible with the v0.1 demo report and now includes runtime versions.
+`benchmark hotkey` runs `origin direct`, `slizen cold`, and `slizen hot` phases.
+It reports client latency plus cache hits/misses from `/v1/status`, physical
+origin GET reduction from `INFO commandstats`, the Slizen logical upstream
+delta used for isolation, and one continuous origin `run_id`. Its JSON schema
+remains additive-compatible with earlier demo reports.
 
 ## Interpreting results
 
@@ -154,8 +181,10 @@ The intended signal is narrower: under a repeated, read-heavy skew, determine wh
 
 ## Release evidence
 
-`make release-check` validates tagged source with 1,000 keys, concurrency 32, a fixed cap of 100,000 generated operations per phase, and a 30-second safety duration. The 20,000-operation moving-flash interval yields five deterministic flash windows when the cap is reached. Release evidence requires the exact `uniform`, `skew-80-20`, `skew-99-1`, and `moving-flash` scenario set. Every origin and Slizen phase must report exactly 100,000 `operation_attempts`, `termination_reason: "request_limit"`, command-latency samples matching those attempts, final-validation samples matching `validation_reads`, and total `requests` matching attempts plus validation reads. Slizen miss reasons must be numeric and sum to its total cache misses. An unexpectedly slow or internally inconsistent phase fails the reproducibility gate explicitly. It also requires all four scenarios to have zero failures and zero `value_mismatches`; the stable 99/1 scenario must prove positive origin GET reduction with real cache hits. These are correctness and reproducibility gates, not pass/fail latency, capacity, or universal origin-reduction thresholds.
+`make release-check` validates tagged source with 1,000 keys, concurrency 32, a fixed cap of 100,000 generated operations per phase, and a 30-second safety duration. The 20,000-operation moving-flash interval yields five deterministic flash windows when the cap is reached. Release evidence requires the exact `uniform`, `skew-80-20`, `skew-99-1`, and `moving-flash` scenario set. Every origin and Slizen phase must report exactly 100,000 `operation_attempts`, `termination_reason: "request_limit"`, command-latency samples matching those attempts, final-validation samples matching `validation_reads`, total `requests` matching attempts plus validation reads, `upstream_gets_source="origin_info_commandstats"`, and one shared non-empty `origin_run_id` per comparison. Direct physical GETs must equal direct reads; Slizen physical GETs must equal `slizen_status_upstream_gets`. Slizen miss reasons must be numeric and sum to its total cache misses. An unexpectedly slow or internally inconsistent phase fails the reproducibility gate explicitly. It also requires all four scenarios to have zero failures and zero `value_mismatches`; the stable 99/1 scenario must prove positive physical origin GET reduction with real cache hits. These are correctness and reproducibility gates, not pass/fail latency, capacity, or universal origin-reduction thresholds.
 
-After a tag passes validation, the release workflow publishes the multi-architecture image, records GitHub-native provenance, and runs `scripts/release_evidence.sh` against the exact `ghcr.io/slizendb/slizen@sha256:...` image. The resulting manifest binds the image digest, full commit, version, workload JSON, demo report, and SHA-256 checksums.
+After a tag passes validation, the release workflow publishes the multi-architecture image, records GitHub-native provenance, and runs `scripts/release_evidence.sh` against the exact `ghcr.io/slizendb/slizen@sha256:...` image. It also generates a release-version Helm archive and raw observe-sidecar manifest from a temporary copy of the tagged source. Their image references use the digest returned by that registry push; the workflow never guesses a digest or rewrites the tag.
+
+The resulting `slizen.release-evidence.v2` manifest binds the image digest, full commit, version, workload JSON, demo report, `slizen-<version>.tgz`, and `slizen-observe-sidecar-<version>.yaml`. Each deployment artifact has its own SHA-256 under `deployment_artifacts`, and `SHA256SUMS` covers both deployment artifacts plus the complete evidence set. GitHub-native build-provenance attestations are emitted separately for the image, Helm archive, and raw manifest.
 
 The manually dispatched `extended-validation` workflow runs 100,000-cardinality microbenchmarks five times and a 100,000-key, concurrency-128 workload without a universal latency threshold. It is intentionally separate from every-push and release CI because shared runners are not a stable performance baseline and the run is materially more expensive. Longer soak, resource profiling, upstream outage, and restart/drain drills still require dedicated engineering evidence.

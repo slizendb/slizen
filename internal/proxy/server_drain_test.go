@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -207,6 +208,18 @@ func TestServerRejectsConnectionsAtConfiguredLimit(t *testing.T) {
 	}
 }
 
+func TestServerReportsAcceptedConnectionLifecycle(t *testing.T) {
+	cfg := drainTestConfig()
+	server, _, _ := startDrainTestServer(t, cfg, testutil.NewFakeUpstream())
+	conn := dialDrainTestServer(t, server)
+
+	waitActiveConnectionsMetric(t, server, "1")
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitActiveConnectionsMetric(t, server, "0")
+}
+
 func TestServerCloseIsIdempotent(t *testing.T) {
 	cfg := drainTestConfig()
 	server, _, startDone := startDrainTestServer(t, cfg, testutil.NewFakeUpstream())
@@ -226,6 +239,25 @@ func TestServerCloseIsIdempotent(t *testing.T) {
 	}
 	if err := waitStartDone(t, startDone); err != nil {
 		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func waitActiveConnectionsMetric(t *testing.T, server *Server, want string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		response := httptest.NewRecorder()
+		server.svc.Metrics().Handler().ServeHTTP(
+			response,
+			httptest.NewRequest("GET", "/metrics", nil),
+		)
+		if strings.Contains(response.Body.String(), "\nslizen_active_connections "+want+"\n") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("active connection metric did not become %s:\n%s", want, response.Body.String())
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

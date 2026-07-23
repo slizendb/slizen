@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -53,7 +54,10 @@ type Recorder struct {
 	getCacheHits          prometheus.Counter
 	cacheEntries          prometheus.Gauge
 	cacheBytes            prometheus.Gauge
+	cacheMaxEntries       prometheus.Gauge
+	cacheMaxBytes         prometheus.Gauge
 	cacheEvictions        prometheus.Counter
+	activeConnections     prometheus.Gauge
 	upstreamReqs          *prometheus.CounterVec
 	upstreamErrors        *prometheus.CounterVec
 	upstreamLatency       *prometheus.HistogramVec
@@ -90,10 +94,13 @@ func New() *Recorder {
 	r.cacheMissReasons = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "slizen_cache_miss_reasons_total", Help: "Total local cache misses by bounded reason."}, []string{"reason"})
 	r.cacheEntries = prometheus.NewGauge(prometheus.GaugeOpts{Name: "slizen_cache_entries", Help: "Current local cache entries."})
 	r.cacheBytes = prometheus.NewGauge(prometheus.GaugeOpts{Name: "slizen_cache_bytes", Help: "Approximate local cache bytes."})
+	r.cacheMaxEntries = prometheus.NewGauge(prometheus.GaugeOpts{Name: "slizen_cache_max_entries", Help: "Configured maximum local cache entries; zero means no separate entry-count limit."})
+	r.cacheMaxBytes = prometheus.NewGauge(prometheus.GaugeOpts{Name: "slizen_cache_max_bytes", Help: "Configured maximum approximate local cache bytes."})
 	r.cacheEvictions = prometheus.NewCounter(prometheus.CounterOpts{Name: "slizen_cache_evictions_total", Help: "Total local cache evictions."})
-	r.upstreamReqs = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "slizen_upstream_requests_total", Help: "Total upstream Redis or Valkey requests."}, []string{"command"})
-	r.upstreamErrors = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "slizen_upstream_errors_total", Help: "Total upstream Redis or Valkey errors."}, []string{"command"})
-	r.upstreamLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "slizen_upstream_duration_seconds", Help: "Upstream request duration.", Buckets: prometheus.DefBuckets}, []string{"command", "result"})
+	r.activeConnections = prometheus.NewGauge(prometheus.GaugeOpts{Name: "slizen_active_connections", Help: "Current accepted downstream RESP connections."})
+	r.upstreamReqs = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "slizen_upstream_requests_total", Help: "Total logical data-path calls Slizen made to Redis or Valkey; client retries and health checks are not separate calls."}, []string{"command"})
+	r.upstreamErrors = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "slizen_upstream_errors_total", Help: "Total logical upstream calls that ended in error after client retry handling."}, []string{"command"})
+	r.upstreamLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "slizen_upstream_duration_seconds", Help: "Logical upstream call duration including pool wait, retries, and backoff.", Buckets: prometheus.DefBuckets}, []string{"command", "result"})
 	r.hotKeys = prometheus.NewGauge(prometheus.GaugeOpts{Name: "slizen_hot_keys", Help: "Current hot key count."})
 	r.promotions = prometheus.NewCounter(prometheus.CounterOpts{Name: "slizen_promotions_total", Help: "Total hot-key promotions."})
 	r.demotions = prometheus.NewCounter(prometheus.CounterOpts{Name: "slizen_demotions_total", Help: "Total hot-key demotions."})
@@ -109,6 +116,8 @@ func New() *Recorder {
 	}
 
 	r.registry.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		r.requests,
 		r.requestLatency,
 		r.cacheHits,
@@ -116,7 +125,10 @@ func New() *Recorder {
 		r.cacheMissReasons,
 		r.cacheEntries,
 		r.cacheBytes,
+		r.cacheMaxEntries,
+		r.cacheMaxBytes,
 		r.cacheEvictions,
+		r.activeConnections,
 		r.upstreamReqs,
 		r.upstreamErrors,
 		r.upstreamLatency,
@@ -196,6 +208,19 @@ func (r *Recorder) ObserveCache(entries int, bytes int64, evictions uint64) {
 	if delta := advanceHighWater(&r.evictionSeen, evictions); delta > 0 {
 		r.cacheEvictions.Add(float64(delta))
 	}
+}
+
+func (r *Recorder) SetCacheLimits(maxBytes int64, maxEntries int) {
+	r.cacheMaxBytes.Set(float64(maxBytes))
+	r.cacheMaxEntries.Set(float64(maxEntries))
+}
+
+func (r *Recorder) ConnectionOpened() {
+	r.activeConnections.Inc()
+}
+
+func (r *Recorder) ConnectionClosed() {
+	r.activeConnections.Dec()
 }
 
 func (r *Recorder) ObserveUpstream(command string, d time.Duration, err error) {

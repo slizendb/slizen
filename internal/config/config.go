@@ -108,7 +108,7 @@ func Default() Config {
 		Mode: "observe",
 		Proxy: ProxyConfig{
 			Listen:          "0.0.0.0:6380",
-			ReadTimeout:     3 * time.Second,
+			ReadTimeout:     5 * time.Minute,
 			WriteTimeout:    3 * time.Second,
 			ShutdownTimeout: 10 * time.Second,
 			MaxCommandBytes: 1 * 1024 * 1024,
@@ -414,6 +414,11 @@ func applyEnv(cfg *Config) error {
 			*target = value
 		}
 	}
+	setOpaqueString := func(name string, target *string) {
+		if value, ok := os.LookupEnv(name); ok {
+			*target = value
+		}
+	}
 	setBool := func(name string, target *bool) error {
 		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 			parsed, err := strconv.ParseBool(value)
@@ -454,10 +459,10 @@ func applyEnv(cfg *Config) error {
 		return err
 	}
 	setString("SLIZEN_UPSTREAM_ADDRESS", &cfg.Upstream.Address)
-	setString("SLIZEN_UPSTREAM_USERNAME", &cfg.Upstream.Username)
-	setString("SLIZEN_UPSTREAM_PASSWORD", &cfg.Upstream.Password)
+	setOpaqueString("SLIZEN_UPSTREAM_USERNAME", &cfg.Upstream.Username)
+	setOpaqueString("SLIZEN_UPSTREAM_PASSWORD", &cfg.Upstream.Password)
 	setString("SLIZEN_KEY_VISIBILITY", &cfg.Privacy.KeyVisibility)
-	setString("SLIZEN_KEY_HASH_SECRET", &cfg.Privacy.KeyHashSecret)
+	setOpaqueString("SLIZEN_KEY_HASH_SECRET", &cfg.Privacy.KeyHashSecret)
 	setString("SLIZEN_LOG_LEVEL", &cfg.Logging.Level)
 	return nil
 }

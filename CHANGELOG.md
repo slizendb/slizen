@@ -10,23 +10,30 @@ Release status: candidate source tree. No `v0.2.3` tag, published image, immutab
 - The protected tier receives seven eighths and the probationary tier one eighth of the existing global byte and entry budgets. This is a partition of the configured limits, not additional memory.
 - Cache miss attribution now uses the fixed `policy_bypass`, `not_admitted`, `not_present`, and internal `unclassified` reason set. Status and workload evidence expose the three request-path reasons without using Redis keys as labels.
 - At hotness capacity, an unseen observation now does O(1) victim work and is dropped when the current FIFO victim is HOT. Audit `capacity_observations_dropped`, Prometheus `slizen_hotness_capacity_observations_dropped_total`, and `telemetry_complete=false` expose that bounded protection; it is not an unlimited scan-resistance claim.
+- `slizenctl compatibility report` now exposes the command contract compiled into the exact CLI version and commit. An explicit command list is a bounded offline CI gate; argument-limited commands require an explicit acknowledgement after review, and the tool does not claim to discover an application's workload.
+- An import-ready Grafana dashboard and conservative Prometheus staging rules cover request and logical upstream-call behavior, cache admission and capacity, lifecycle events, and incomplete telemetry without using Redis keys as labels. Actual origin command volume is explicitly sourced from Redis/Valkey commandstats or an origin-side exporter rather than inferred from Slizen retry-oblivious counters.
+- The staging runbook now includes pre-agreed thresholds, observe and one-prefix soaks, a measured endpoint-first rollback rehearsal, upgrade semantics, a failure-mode matrix, and a pass/partial/fail self-service gate.
+- The standalone Helm chart now renders an ingress NetworkPolicy by default. RESP and admin ingress remain denied until exact application and monitoring peers are declared; v0.2 has no downstream authentication boundary.
 
 ### Changed
 
 - Probationary admission preserves the candidate's original absolute local expiry when it moves into the protected tier. Candidate retention is additionally capped by the hotness window.
 - A successful, exact, option-free `SET key value` through Slizen refreshes the protected value only when the key is already admitted and still matches a cache policy. Cold keys, option-bearing `SET`, other mutations, nil replies, and errors keep conservative invalidation behavior.
 - Proxied mutations serialize per bounded key stripe, invalidate protected and probationary state before upstream dispatch, and apply a final epoch barrier so overlapping refills cannot restore superseded data.
+- Prometheus now exposes active downstream connections, configured cache byte and entry bounds, and bounded Go runtime/Linux process collectors so operators can distinguish connection growth and cache accounting from heap, allocation rate, RSS, CPU, and goroutine behavior.
+- The downstream idle read deadline now defaults to five minutes instead of three seconds and is documented as a client-pool compatibility setting; `proxy.max_connections` remains the hard connection bound.
+- Until v0.2.3 is published, the default Helm values and raw staging sidecar pin the verified v0.2.2 image digest instead of referencing an image that does not exist. Chart `appVersion`, the default tag, the digest, and rendered application labels identify that same stable runtime.
 
 ### Performance evidence
 
-- Five local Docker repeats used the unchanged cold, request-bound `skew-99-1` workload with seed 42, 1,000 keys, 100,000 generated operations per phase, a 95/5 read/write mix, 128-byte values, and concurrency 32. Direct origin GETs were `94,961` in every repeat; Slizen origin GETs were `798`–`803`, a `99.154390%`–`99.159655%` reduction, with a `99.121745%`–`99.151231%` cache-hit ratio.
-- Every repeat had zero request failures, value mismatches, final-validation failures, and final-validation mismatches. Slizen read p99 was `1.175`–`1.251 ms` versus `0.986`–`1.042 ms` direct, so this supports an origin-load claim, not a speed claim.
+- Five local Docker repeats used the unchanged cold, request-bound `skew-99-1` workload with seed 42, 1,000 keys, 100,000 generated operations per phase, a 95/5 read/write mix, 128-byte values, and concurrency 32. Direct phases had `94,961` successful GETs; Slizen recorded `798`–`803` logical upstream GET calls, a `99.154390%`–`99.159655%` proxy-side avoidance estimate, with a `99.121745%`–`99.151231%` cache-hit ratio.
+- Every repeat had zero request failures, value mismatches, final-validation failures, and final-validation mismatches. Slizen read p99 was `1.175`–`1.251 ms` versus `0.986`–`1.042 ms` direct. These historical repeats predate origin `commandstats` capture, so they support neither a physical-command nor a speed claim.
 - These are local source-tree release-candidate measurements, not a tagged-image result or a universal production threshold.
 
 ### Limitations
 
 - Direct writes to Redis or Valkey still bypass Slizen's invalidation and may remain stale until local TTL expiration.
-- The release remains a single-node developer preview with limited Redis compatibility and an unauthenticated admin API.
+- The release remains a single-node developer preview with limited Redis compatibility, one standalone upstream address without Cluster/Sentinel discovery, no downstream RESP authentication/TLS or upstream Redis/Valkey TLS, an unauthenticated admin API, and no cross-sidecar cache invalidation.
 
 ## v0.2.2 - 2026-07-22 - Proxy Tax Reduction and Benchmark Attribution
 
@@ -43,8 +50,8 @@ Release status: candidate source tree. No `v0.2.3` tag, published image, immutab
 
 - On Apple M5 with Go 1.26.5, the corrected handler-level cache-hit benchmark median fell from 488.0 ns/op to 159.2 ns/op; the concurrent dispatch median fell from 918.8 ns/op to 531.6 ns/op. Allocations fell from 320 B and 8 allocations per operation to 16 B and 2 allocations per operation. These are local microbenchmark results, not production capacity claims.
 - Against commit `86623ef`, steady-state handler drain bookkeeping fell by 54–71% across local `GOMAXPROCS=1,10,32` microbenchmarks. In ten counterbalanced `GOMAXPROCS=10` dispatch-level warm-hit A/B pairs, every pair favored the candidate and median time fell from 538.6 to 383.75 ns/op (28.7%) with allocations unchanged at 15 B and 2 allocations per operation. These in-process results exclude TCP, RESP parsing, socket I/O, and upstream work.
-- Across three local Docker hot-key repeats, warm Slizen p99 had a 0.095 ms median tax over direct Valkey while serving 100% cache hits with zero origin GETs. Across three complete request-bound gates, the mixed 99/1 workload reduced origin GETs by 71.4–79.2% with a 0.23–0.52 ms read-p99 tax. These measurements describe this machine and workload only.
-- Across five alternating local Docker 99/1 A/B pairs, guaranteed final-window promotion raised the median cache-hit ratio from 36.00% to 61.61%, raised median origin GET reduction from 72.57% to 85.92%, and cut median upstream GETs from 26,044 to 13,371. Median Slizen read p99 remained effectively flat at 1.364 versus 1.368 ms, with zero failures or value/final-validation mismatches. The steady tracker benchmark cost rose by 0.76 ns/op (3.1%) with zero allocations; all figures are specific to this host and workload.
+- Across three local Docker hot-key repeats, warm Slizen p99 had a 0.095 ms median tax over direct Valkey while serving 100% cache hits with zero logical upstream GET calls. Across three complete request-bound gates, the mixed 99/1 workload reduced logical upstream GET calls by 71.4–79.2% with a 0.23–0.52 ms read-p99 tax. These proxy-side measurements describe this machine and workload only and did not capture physical `commandstats`.
+- Across five alternating local Docker 99/1 A/B pairs, guaranteed final-window promotion raised the median cache-hit ratio from 36.00% to 61.61%, raised median logical upstream GET-call avoidance from 72.57% to 85.92%, and cut median logical upstream GET calls from 26,044 to 13,371. Median Slizen read p99 remained effectively flat at 1.364 versus 1.368 ms, with zero failures or value/final-validation mismatches. The steady tracker benchmark cost rose by 0.76 ns/op (3.1%) with zero allocations; all figures are specific to this host and workload and predate physical `commandstats` capture.
 
 ## v0.2.1 - 2026-07-22 - Launch Hardening
 

@@ -8,11 +8,11 @@
 
 Slizen — экспериментальный адаптивный cache-proxy для read-heavy нагрузок. Он ставится перед Redis/Valkey, измеряет температуру ключей, кэширует только разогретые значения `GET`, объединяет одновременные cache miss и инвалидирует локальные копии, когда запись проходит через proxy.
 
-Slizen v0.2 — single-node, не source of truth и поддерживает только ограниченный набор Redis-команд. Прямые записи в Redis/Valkey в обход Slizen могут оставаться stale до истечения local TTL. Admin API по умолчанию bind-ится локально и в v0.2 не имеет встроенной аутентификации.
+Slizen v0.2 — single-node, не source of truth и поддерживает только ограниченный набор Redis-команд. Upstream — один standalone Redis/Valkey address; Cluster redirections и Sentinel discovery/failover не поддерживаются. Прямые записи в Redis/Valkey в обход Slizen могут оставаться stale до истечения local TTL. В v0.2 нет downstream RESP-аутентификации/TLS и upstream Redis/Valkey TLS: plaintext path должен оставаться приватным, а RESP listener — на loopback внутри Pod/host или доступным только явно разрешённым клиентам через NetworkPolicy. Admin API тоже не имеет встроенной аутентификации и по умолчанию bind-ится локально.
 
-**Evidence, а не обещание скорости.** В воспроизводимом image-bound synthetic-run v0.2.2 на 1 000 ключей с распределением 99/1 Slizen измерил **на 89,778% меньше origin GET** (`94 961` напрямую против `9 707` через Slizen), cache-hit ratio `73,628%` и ноль request failures, value mismatches, final-validation failures и final-validation mismatches. Атрибутированный read p99 был `2,137 ms` через Slizen против `1,460 ms` напрямую, поэтому это не утверждение «Slizen быстрее». Вот [сырой JSON релиза](https://github.com/slizendb/slizen/releases/download/v0.2.2/slizen-workload-result.json) и [методика](docs/BENCHMARKING.md); результат относится только к конкретному runner, конфигурации и workload.
+**Evidence, а не обещание скорости.** В воспроизводимом image-bound synthetic-run v0.2.2 на 1 000 ключей с распределением 99/1 Slizen измерил **на 89,778% меньше logical upstream GET calls** (`94 961` успешных direct GET против `9 707` logical calls через Slizen), cache-hit ratio `73,628%` и ноль request failures, value mismatches, final-validation failures и final-validation mismatches. Исторический artifact не снимал Redis/Valkey `commandstats`, поэтому это proxy-side estimate, а не доказательство физического числа wire-команд. Атрибутированный read p99 был `2,137 ms` через Slizen против `1,460 ms` напрямую, поэтому это не утверждение «Slizen быстрее». Вот [сырой JSON релиза](https://github.com/slizendb/slizen/releases/download/v0.2.2/slizen-workload-result.json) и [методика](docs/BENCHMARKING.md); результат относится только к конкретному runner, конфигурации и workload.
 
-**v0.2.3 пока release candidate в source tree.** Bounded two-hit admission и exact-SET refresh для уже admitted keys снизили origin GET с `94 961` напрямую до `798`–`803` в пяти неизменённых локальных cold 99/1 повторах (`99,154390%`–`99,159655%` снижения) при нуле failures и mismatches. Read p99 Slizen был `1,175`–`1,251 ms` против `0,986`–`1,042 ms` напрямую: это результат про снижение origin load, а не обещание скорости или универсальных 99%. Это локальный candidate evidence, не tag, опубликованный image, digest или image-bound release; стабильная установка ниже остаётся v0.2.2 до публикации. См. [candidate notes](docs/RELEASE_NOTES_v0.2.3.md).
+**v0.2.3 пока release candidate в source tree.** Bounded two-hit admission и exact-SET refresh для уже admitted keys снизили logical upstream GET calls с `94 961` успешных direct GET до `798`–`803` в пяти неизменённых локальных cold 99/1 повторах (`99,154390%`–`99,159655%` proxy-side avoidance) при нуле failures и mismatches. Эти исторические локальные повторы тоже были сделаны до physical `commandstats` capture. Read p99 Slizen был `1,175`–`1,251 ms` против `0,986`–`1,042 ms` напрямую: это не обещание скорости или универсальных 99%. Это локальный candidate evidence, не tag, опубликованный image, digest или image-bound release; стабильная установка ниже остаётся v0.2.2 до публикации. См. [candidate notes](docs/RELEASE_NOTES_v0.2.3.md).
 
 Ищем трёх design partners, которые реально сталкивались с hot-key инцидентами в Redis или Valkey. Если можешь проверить single-node developer preview в изолированной среде, [опиши workload без чувствительных данных](https://github.com/slizendb/slizen/issues/new?template=design-partner.yml).
 
@@ -27,10 +27,12 @@ Slizen v0.2 — single-node, не source of truth и поддерживает т
 
 ## Установка
 
-Публичный multi-architecture image лежит в GHCR. Тег `0.2` указывает на свежий patch-релиз ветки v0.2; для воспроизводимого deployment используй immutable digest из release evidence.
+Публичный multi-architecture image лежит в GHCR. `0.2` — mutable discovery
+alias; рабочий путь ниже закреплён на проверенном digest v0.2.2.
 
 ```sh
-docker pull ghcr.io/slizendb/slizen:0.2
+export SLIZEN_IMAGE=ghcr.io/slizendb/slizen@sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627
+docker pull "$SLIZEN_IMAGE"
 ```
 
 Запуск в observe-only режиме с Redis или Valkey на хосте:
@@ -44,10 +46,10 @@ docker run --rm \
   -e SLIZEN_PROXY_LISTEN=0.0.0.0:6380 \
   -e SLIZEN_ADMIN_LISTEN=0.0.0.0:9090 \
   -e SLIZEN_UPSTREAM_ADDRESS=host.docker.internal:6379 \
-  ghcr.io/slizendb/slizen:0.2
+  "$SLIZEN_IMAGE"
 ```
 
-Если origin недоступен как `host.docker.internal:6379`, подставь его приватный Docker/DNS-адрес. См. [последний релиз](https://github.com/slizendb/slizen/releases/latest), [release notes v0.2.2](docs/RELEASE_NOTES_v0.2.2.md) и [безопасную конфигурацию](docs/CONFIGURATION.md).
+Если origin недоступен как `host.docker.internal:6379`, подставь его приватный Docker/DNS-адрес. Для Kubernetes начни с [30-минутной observe-установки](docs/STAGING_QUICKSTART.md), затем пройди полный [staging runbook](docs/STAGING_ROLLOUT.md). См. [последний релиз](https://github.com/slizendb/slizen/releases/latest), [release notes v0.2.2](docs/RELEASE_NOTES_v0.2.2.md) и [безопасную конфигурацию](docs/CONFIGURATION.md).
 
 ## Быстрый старт из исходников
 
@@ -129,7 +131,13 @@ make demo-down
 
 ## Kubernetes staging
 
-В v0.2 есть observe-first [sidecar example](deploy/kubernetes/observe-sidecar.yaml), [standalone Helm chart](charts/slizen/README.md) без Operator и [пошаговый rollout/rollback guide](docs/STAGING_ROLLOUT.md).
+В v0.2 есть observe-first [sidecar example](deploy/kubernetes/observe-sidecar.yaml) и [standalone Helm chart](charts/slizen/README.md) без Operator. Helm chart создаёт default-deny ingress NetworkPolicy; до маршрутизации трафика укажи конкретные application и monitoring peers. Перед сменой client endpoint прочитай исполнимый [rollout/rollback runbook](docs/STAGING_ROLLOUT.md), [failure-mode contract](docs/FAILURE_MODES.md), [observability pack](docs/OBSERVABILITY.md) и [self-service staging gate](docs/STAGING_RELEASE_GATE.md).
+
+У каждого sidecar replica свой независимый disposable cache. v0.2 не
+рассылает invalidation между application Pods, поэтому первый cache-mode
+sidecar trial должен быть на одной реплике, read-only prefix либо с явно
+принятым local-TTL staleness budget. Multi-replica `observe` безопасен:
+локальные values не сохраняются и не отдаются.
 
 ```sh
 make validate-k8s
@@ -142,7 +150,7 @@ make validate-k8s
 - bounded local cache;
 - hot-key tracker с hysteresis и cooldown;
 - request coalescing через `singleflight`;
-- pre-write conservative invalidation и exact-SET refresh только для уже admitted cache-policy keys;
+- v0.2.3 candidate: pre-write conservative invalidation и exact-SET refresh только для уже admitted cache-policy keys; stable v0.2.2 invalidates после upstream call;
 - Prometheus metrics;
 - CLI `slizenctl`;
 - Docker Compose demo с Valkey;
@@ -152,6 +160,20 @@ make validate-k8s
 
 - [docs/REDIS_COMPATIBILITY.md](docs/REDIS_COMPATIBILITY.md) — какие Redis-команды реально поддержаны, проксируются или отклоняются.
 - [docs/BENCHMARKING.md](docs/BENCHMARKING.md) — как воспроизвести hot-key benchmark и как читать результат.
+
+В source-tree candidate v0.2.3 можно заранее проверить явный список команд без
+запущенного Slizen или Redis. Неизвестная или отклоняемая команда завершает
+проверку с ненулевым кодом. Команды с более узким, чем у Redis, набором
+разрешённых аргументов требуют явного подтверждения ограничений:
+
+```sh
+go run ./cmd/slizenctl compatibility report --output json --accept-limitations GET MGET SET TTL
+go run ./cmd/slizenctl compatibility report --output json GET EVAL
+```
+
+Это проверка заявленного списка, а не автоматическое обнаружение workload. У
+ad hoc `go run` поле `binary_commit` будет `unknown`; для сохраняемого staging
+evidence используй отчёт из stamped published `slizenctl`.
 
 ```sh
 make demo-up
@@ -172,6 +194,13 @@ Slizen v0.2 не production-ready.
 - Mesh и репликации между Slizen-нодами пока нет.
 - Прямые записи в Redis/Valkey в обход Slizen могут оставаться stale до истечения local TTL.
 - Поддерживается только ограниченный набор Redis-команд.
+- Downstream RESP listener не поддерживает client `AUTH` или TLS, а upstream
+  client — Redis/Valkey TLS: нужен приватный plaintext path или отдельно
+  проверенный внешний termination/tunnel.
+- Нужен тест инициализации конкретной client library: профиль, автоматически
+  отправляющий `AUTH`, требующий TLS или не переносящий отклонённые
+  `HELLO`/`CLIENT`, нельзя переключить одной заменой endpoint. Origin
+  credentials настраиваются отдельно в Slizen.
 - Admin API без встроенной аутентификации и должен оставаться приватным.
 
 ## Наблюдаемость
@@ -188,9 +217,23 @@ curl http://127.0.0.1:9090/metrics
 
 Raw values никогда не попадают в логи, метрики или admin API. Hot-key output по умолчанию показывает HMAC-SHA256 identifier ключа. `privacy.key_visibility = "plain"` включай только на приватном admin listener для локальной отладки.
 
-`/v1/status`, workload JSON и Prometheus отдельно показывают cache misses с фиксированными причинами `policy_bypass`, `not_admitted` и `not_present`. Оба cache tier входят в те же aggregate bytes/entries. Redis keys никогда не используются как labels.
+Текущий source tree v0.2.3 добавляет к существующим bounded-метрикам отдельные
+cache miss reasons (`policy_bypass`, `not_admitted`, `not_present`), active
+downstream connections, gauges настроенных cache limits и
+`slizen_hotness_capacity_observations_dropped_total`. Опубликованный image
+v0.2.2 этих v0.2.3-only series не отдаёт; observability guide явно отмечает
+затронутые panels и fallback checks. Оба candidate cache tier входят в те же
+aggregate bytes/entries. Redis keys никогда не используются как labels.
 
 `/v1/audit` и `slizenctl audit` выдают bounded JSON-отчёт с effective policy, recommendation и стабильными reason codes. Policy prefixes и Redis values в отчёт не попадают. `telemetry_complete=false` означает, что текущий набор обрезан лимитом отчёта, tracker уже вытеснял ключи, unseen observation был пропущен ради текущего HOT FIFO victim при полном tracker или ключ длиннее 1 024 байт не наблюдался. Capacity drops видны в `capacity_observations_dropped` и метрике `slizen_hotness_capacity_observations_dropped_total`; O(1) правило защищает текущий HOT victim, но не обещает unlimited scan resistance.
+
+Готовые [Grafana dashboard и Prometheus staging
+alerts](docs/OBSERVABILITY.md) разделяют hit ratio, proxy-side logical
+upstream-call avoidance, latency, ошибки, cache capacity и неполную telemetry.
+Физическое число команд origin и retry amplification нужно брать из
+Redis/Valkey `commandstats` или origin-side exporter. Readiness/OOM/restart
+alerts по-прежнему должны приходить из Kubernetes или другого platform
+monitoring.
 
 ## Разработка
 
@@ -209,6 +252,10 @@ Release материалы:
 
 - [CHANGELOG.md](CHANGELOG.md)
 - [docs/DEMO.md](docs/DEMO.md)
+- [docs/STAGING_ROLLOUT.md](docs/STAGING_ROLLOUT.md)
+- [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)
+- [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)
+- [docs/STAGING_RELEASE_GATE.md](docs/STAGING_RELEASE_GATE.md)
 - [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 - [docs/PUBLIC_RELEASE_CHECKLIST.md](docs/PUBLIC_RELEASE_CHECKLIST.md)
 - [docs/RELEASE_NOTES_v0.1.md](docs/RELEASE_NOTES_v0.1.md)

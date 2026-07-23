@@ -1,43 +1,25 @@
-mode: cache
+# Copy this file and replace the namespace, Pod labels, and upstream address
+# with values verified in the target staging cluster.
+mode: observe
 
 upstream:
-  address: valkey.staging.svc.cluster.local:6379
-  existingSecret:
-    name: slizen-upstream
-    usernameKey: username
-    passwordKey: password
-
-cache:
-  maxBytes: 33554432
-  maxEntries: 20000
-  maxLocalTTL: 15s
-  policies:
-    - prefix: ""
-      mode: observe
-    - prefix: "session:"
-      mode: deny
-    - prefix: "catalog:"
-      mode: cache
-      maxItemBytes: 262144
-      maxLocalTTL: 5s
-
-privacy:
-  existingSecret:
-    name: slizen-privacy
-    key: key-hash-secret
+  # v0.2 uses plaintext RESP to origin. Do not point this at a TLS-only service.
+  address: redis.default.svc.cluster.local:6379
 
 admin:
+  # Metrics shares the complete admin listener; expose it only with the
+  # restricted NetworkPolicy peer below.
   listen: 0.0.0.0:9090
   allowNetworkAccess: true
 
 metrics:
   enabled: true
   serviceMonitor:
+    # Set false only when another reviewed continuous scraper owns this Service.
     enabled: true
-    labels:
-      release: prometheus
 
 networkPolicy:
+  enabled: true
   redisIngressPeers:
     - namespaceSelector:
         matchLabels:

@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/tidwall/redcon"
+
+	"github.com/slizendb/slizen/internal/compatibility"
 )
 
 type ParsedCommand struct {
@@ -55,29 +57,30 @@ func setUsesGetOption(options []string) bool {
 	return false
 }
 
+func classifyNormalizedCommand(name string) compatibility.Class {
+	return compatibility.LookupNormalized(name).Class
+}
+
+func isUnsafeClass(class compatibility.Class) bool {
+	return class == compatibility.ClassRejectedStateful || class == compatibility.ClassRejectedBlocking
+}
+
+func isRejectedMutationClass(class compatibility.Class) bool {
+	return class == compatibility.ClassRejectedMutation
+}
+
+func isBlockingClass(class compatibility.Class) bool {
+	return class == compatibility.ClassRejectedBlocking
+}
+
 func isUnsafeCommand(name string) bool {
-	switch name {
-	case "MULTI", "EXEC", "WATCH", "UNWATCH", "SUBSCRIBE", "PSUBSCRIBE", "SSUBSCRIBE", "MONITOR":
-		return true
-	default:
-		return isBlockingCommand(name)
-	}
+	return isUnsafeClass(classifyNormalizedCommand(name))
 }
 
 func isRejectedMutation(name string) bool {
-	switch name {
-	case "MSET", "RENAME", "HSET", "HDEL", "LPUSH", "RPUSH", "LPOP", "RPOP", "SADD", "SREM":
-		return true
-	default:
-		return false
-	}
+	return isRejectedMutationClass(classifyNormalizedCommand(name))
 }
 
 func isBlockingCommand(name string) bool {
-	switch name {
-	case "BLPOP", "BRPOP", "BRPOPLPUSH", "BLMOVE", "BZPOPMIN", "BZPOPMAX", "XREAD", "XREADGROUP":
-		return true
-	default:
-		return false
-	}
+	return isBlockingClass(classifyNormalizedCommand(name))
 }

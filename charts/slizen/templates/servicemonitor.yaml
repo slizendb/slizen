@@ -2,6 +2,11 @@
 {{- if not .Values.metrics.enabled }}
 {{- fail "metrics.enabled must be true when metrics.serviceMonitor.enabled is true" }}
 {{- end }}
+{{- $scrapeIntervalNanoseconds := include "slizen.durationNanoseconds" (list .Values.metrics.serviceMonitor.interval "metrics.serviceMonitor.interval") | int64 }}
+{{- $scrapeTimeoutNanoseconds := include "slizen.durationNanoseconds" (list .Values.metrics.serviceMonitor.scrapeTimeout "metrics.serviceMonitor.scrapeTimeout") | int64 }}
+{{- if gt $scrapeTimeoutNanoseconds $scrapeIntervalNanoseconds }}
+{{- fail "metrics.serviceMonitor.scrapeTimeout must not exceed metrics.serviceMonitor.interval" }}
+{{- end }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

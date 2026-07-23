@@ -8,7 +8,8 @@ The Slizen demo is a local Docker Compose proof path for the v0.2 developer prev
 - `/healthz`, `/readyz`, `/v1/status`, `/v1/hotkeys`, `/v1/audit`, and `/metrics` are reachable.
 - A client can write and read a key through the Slizen proxy.
 - A repeated hot-key workload can produce local cache hits in `cache` mode.
-- Benchmark/report artifacts can show cache hit ratio and origin GET reduction from real counters.
+- Benchmark/report artifacts can show cache hit ratio from Slizen counters and
+  physical origin GET reduction from Redis/Valkey `INFO commandstats`.
 
 Run it:
 
@@ -31,9 +32,16 @@ make demo-down
 The important fields are:
 
 - `Cache Hit %`: percentage of Slizen hot-phase reads served from local cache.
-- `Upstream GETs`: origin GET requests observed by Slizen during that phase.
-- `upstream_get_reduction`: reduction in upstream GETs per successful request compared with direct origin reads.
-- `proved_reduction`: true only when the run produced cache hits and fewer upstream GETs.
+- `Upstream GETs`: physical origin `cmdstat_get:calls` delta during that isolated
+  phase.
+- `upstream_get_reduction`: physical origin GET reduction per successful read
+  compared with the same-origin direct phase.
+- `proved_reduction`: true only when origin identity/counters stayed valid, the
+  run produced cache hits, and physical origin GETs were lower.
+
+The separate Slizen status delta remains a logical proxy-side call count used
+to detect retries or unrelated origin traffic. It is not substituted for the
+physical commandstats measurement.
 
 ## What Not To Promise
 

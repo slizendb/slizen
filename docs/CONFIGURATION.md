@@ -5,6 +5,31 @@ to Redis or Valkey and Slizen collects bounded telemetry, but it never stores
 or serves a local value. Configuration files are applied over built-in defaults
 and non-empty `SLIZEN_*` environment variables are applied last.
 
+## Network and transport boundary
+
+v0.2 accepts plaintext downstream RESP and does not implement downstream
+client `AUTH` or TLS. Its upstream Redis/Valkey client can use a username and
+password, but it also uses plaintext RESP and has no TLS configuration. Keep
+both paths on a private loopback/Pod/cluster network with enforced allow-lists.
+A TLS-required origin is incompatible unless the platform provides a
+separately reviewed local termination or tunnel outside Slizen.
+
+`upstream.address` is one standalone Redis/Valkey endpoint. v0.2 does not use a
+Cluster or Sentinel client, discover topology/failover, follow `MOVED`/`ASK`
+redirections, or make cross-slot `MGET` safe. A Cluster/Sentinel deployment is
+incompatible unless the platform exposes one separately managed,
+standalone-compatible endpoint with the required behavior.
+
+Pointing an authenticated application client at Slizen requires a separate
+client profile with downstream authentication and TLS disabled. Test the exact
+library initialization because v0.2 does not implement `AUTH`, `HELLO`, or
+`CLIENT`; libraries differ in whether unsupported setup commands are optional.
+Configure the origin username/password on Slizen instead.
+
+The admin API has no authentication and shares its listener with `/metrics`.
+Keep it on `127.0.0.1` unless an enforced NetworkPolicy or authenticated
+platform proxy restricts the complete API, not only the metrics path.
+
 ## Selective cache promotion
 
 A key with no matching policy inherits the global mode. Therefore every
@@ -77,12 +102,22 @@ across connections. Enforcing the same limits before parser allocation or as a
 global byte budget requires a bounded parser in redcon or replacing/forking
 that dependency. Upstream GET and MGET replies are fully materialized before
 Slizen can forward or cache them. They do not have a separate heap-byte cap and
-are not bounded by these request settings. Keep the Pod/container memory limit
-in place and use trusted cluster-internal network access for the developer
-preview.
+are not bounded by these request settings. redcon may also buffer replies for
+multiple already-read pipelined commands until the pipeline flushes; the
+configured per-command limits therefore do not bound aggregate pipeline
+response memory. Keep the Pod/container memory limit in place, test maximum
+application pipeline depth against worst-case values, and use trusted
+cluster-internal network access for the developer preview. An OOM kill is
+containment, not graceful admission control.
 
-The read and write timeouts bound clients that stop sending or receiving data;
-malformed RESP is rejected by redcon and the connection is closed.
+`proxy.read_timeout` is the idle downstream-connection deadline, reset after
+each completed command. The v0.2.3 default is `5m`; set it above the
+application pool's expected idle/reuse interval or expect normal clients to
+reconnect when they next borrow an expired connection. It also bounds clients
+that stop partway through a command, while `proxy.max_connections` bounds how
+many such connections can exist. `proxy.write_timeout` bounds clients that
+stop receiving a response. Malformed RESP is rejected by redcon and the
+connection is closed.
 
 ## Privacy-safe key identifiers
 

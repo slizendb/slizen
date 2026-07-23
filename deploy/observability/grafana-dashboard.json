@@ -1,0 +1,1247 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Staging dashboard for Slizen. Core panels support v0.2.2; candidate-only panels say so and show no series on v0.2.2. Proxy-side logical upstream-call avoidance and cache-hit ratio are separate signals; actual origin command volume must come from Redis or Valkey commandstats/exporter. Latency panels are not subtracted to estimate proxy tax.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "All Redis-compatible commands accepted by the selected Slizen targets.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(slizen_requests_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "instant": true,
+          "legendFormat": "requests",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Proxy request rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "Share of proxy requests recorded with result=error. Tune rollout thresholds to the application's baseline.",
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "100 * sum(rate(slizen_requests_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",result=\"error\"}[$__rate_interval])) / sum(rate(slizen_requests_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "instant": true,
+          "legendFormat": "errors",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Proxy error rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "GET cache hits divided by GET hits plus misses. This is not the same as logical upstream-call avoidance because coalescing can reduce upstream demand without creating a cache hit.",
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "100 * sum(rate(slizen_cache_hits_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",command=\"GET\"}[$__rate_interval])) / (sum(rate(slizen_cache_hits_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",command=\"GET\"}[$__rate_interval])) + sum(rate(slizen_cache_misses_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",command=\"GET\"}[$__rate_interval])))",
+          "instant": true,
+          "legendFormat": "GET hit ratio",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "GET cache-hit ratio",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "One minus Slizen logical upstream GET calls divided by proxy GETs. GET only; MGET is intentionally excluded. This proxy-side estimate does not count go-redis retry attempts or health PINGs; confirm actual origin command volume from Redis or Valkey commandstats/exporter. No traffic returns no value.",
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "100 * clamp_max(clamp_min(1 - (sum(rate(slizen_upstream_requests_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",command=\"GET\"}[$__rate_interval])) / sum(rate(slizen_requests_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",command=\"GET\"}[$__rate_interval]))), 0), 1)",
+          "instant": true,
+          "legendFormat": "logical GET call avoidance",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "GET upstream-call avoidance",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (result) (rate(slizen_requests_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Proxy requests by result",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "End-to-end latency observed inside the Slizen request handler. Do not subtract upstream histogram quantiles from these quantiles.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(slizen_request_duration_seconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",command=\"GET\"}[$__rate_interval])))",
+          "legendFormat": "p95",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(slizen_request_duration_seconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",command=\"GET\"}[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "GET latency p95 / p99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "End-to-end latency of each logical Redis or Valkey call made by Slizen, including pool wait, go-redis retries, and retry backoff. This is not server-only latency.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(slizen_upstream_duration_seconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
+          "legendFormat": "p95",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(slizen_upstream_duration_seconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Upstream latency p95 / p99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "Logical data-path calls and terminal errors after go-redis retry handling. Retry attempts and readiness/status PINGs are not separate calls; use origin-side monitoring for physical command volume and retry amplification.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (command) (rate(slizen_upstream_errors_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{command}} errors",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(slizen_upstream_requests_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "all logical upstream calls",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Upstream requests and errors",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (command) (rate(slizen_cache_hits_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{command}} hits",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum by (command) (rate(slizen_cache_misses_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{command}} misses",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Cache hits and misses",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "v0.2.3 candidate and later. Bounded reasons: policy_bypass, not_admitted, not_present, and internal fallback unclassified. Stable v0.2.2 has only aggregate misses.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (reason) (rate(slizen_cache_miss_reasons_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Cache miss reasons",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "Ratio is Slizen logical upstream GET-call rate divided by proxy GET rate; avoidance is one minus that ratio. Both are GET-only proxy-side estimates. They do not count go-redis retry attempts or health PINGs; use Redis or Valkey commandstats/exporter for actual origin volume.",
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "100 * sum(rate(slizen_upstream_requests_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",command=\"GET\"}[$__rate_interval])) / sum(rate(slizen_requests_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",command=\"GET\"}[$__rate_interval]))",
+          "legendFormat": "logical GET call ratio",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "100 * clamp_max(clamp_min(1 - (sum(rate(slizen_upstream_requests_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",command=\"GET\"}[$__rate_interval])) / sum(rate(slizen_requests_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",command=\"GET\"}[$__rate_interval]))), 0), 1)",
+          "legendFormat": "logical GET call avoidance",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "GET upstream-call ratio / avoidance",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "Approximate cache accounting, not Go process RSS or exact heap usage. The configured-maximum series requires the v0.2.3 candidate; v0.2.2 still shows used bytes.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(slizen_cache_bytes{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+          "legendFormat": "used",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum(slizen_cache_max_bytes{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+          "legendFormat": "configured maximum",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Cache bytes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "The configured-maximum series requires the v0.2.3 candidate. A maximum of zero means there is no separate entry-count limit; the byte limit still applies.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 36
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(slizen_cache_entries{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+          "legendFormat": "entries",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum(slizen_cache_max_entries{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+          "legendFormat": "configured maximum",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Cache entries",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(slizen_cache_evictions_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "evictions / s",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Cache eviction rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 44
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(slizen_promotions_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "promotions / s",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(slizen_demotions_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "demotions / s",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Promotions and demotions",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "Shared singleflight results are a concurrency signal, not an exact count of origin calls saved.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 44
+      },
+      "id": 16,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(slizen_coalesced_requests_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "shared requests / s",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Request coalescing",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "Any increase means the bounded hotness audit is incomplete; commands are still forwarded. Oversized drops exist in v0.2.2; capacity drops require the v0.2.3 candidate.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 52
+      },
+      "id": 17,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(slizen_hotness_capacity_observations_dropped_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "capacity drops / s",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(slizen_hotness_oversized_observations_dropped_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "oversized-key drops / s",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Hotness telemetry drops",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "Write and admin-purge invalidations. This is event volume, not direct-origin invalidation coverage or lag.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 52
+      },
+      "id": 18,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (reason) (rate(slizen_invalidations_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}} / s",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Local invalidations",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "v0.2.3 candidate and later. CPU seconds consumed per second; retain container CPU and throttling signals from the platform.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cores"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 60
+      },
+      "id": 19,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(process_cpu_seconds_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "CPU cores",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Process CPU",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "v0.2.3 candidate and later. Process resident memory is not the Kubernetes working set or Pod memory limit; keep platform signals beside it.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 60
+      },
+      "id": 20,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(process_resident_memory_bytes{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+          "legendFormat": "RSS",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Process resident memory",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "v0.2.3 candidate and later. Diagnose sustained growth against request volume and application behavior.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 68
+      },
+      "id": 21,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(go_goroutines{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+          "legendFormat": "goroutines",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Go goroutines",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "v0.2.3 candidate and later. Bytes allocated per second; this is allocation churn, not live heap size. Compare with process RSS and container working set.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 68
+      },
+      "id": 22,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(go_memstats_alloc_bytes_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))",
+          "legendFormat": "allocated bytes / s",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Go allocation rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "v0.2.3 candidate and later. Currently accepted downstream RESP connections; verify reconnects and drains return to the expected level.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 76
+      },
+      "id": 23,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(slizen_active_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+          "legendFormat": "active connections",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Active downstream connections",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "slizen",
+    "redis",
+    "valkey",
+    "staging"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "$datasource"
+        },
+        "definition": "label_values(slizen_requests_total, job)",
+        "includeAll": true,
+        "label": "Prometheus job",
+        "multi": true,
+        "name": "job",
+        "options": [],
+        "query": {
+          "query": "label_values(slizen_requests_total, job)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "$datasource"
+        },
+        "definition": "label_values(slizen_requests_total{job=~\"${job:regex}\"}, instance)",
+        "includeAll": true,
+        "label": "Instance",
+        "multi": true,
+        "name": "instance",
+        "options": [],
+        "query": {
+          "query": "label_values(slizen_requests_total{job=~\"${job:regex}\"}, instance)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Slizen staging",
+  "uid": "slizen-staging",
+  "version": 1,
+  "weekStart": ""
+}

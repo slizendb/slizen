@@ -4,7 +4,9 @@ mode = "observe"
 
 [proxy]
 listen = "0.0.0.0:6380"
-read_timeout = "3s"
+# Idle downstream connection deadline. Tune above the application's expected
+# pool-idle/reuse interval to avoid unnecessary reconnect churn.
+read_timeout = "5m"
 write_timeout = "3s"
 # Maximum graceful proxy drain before remaining connections are force-closed.
 shutdown_timeout = "10s"
@@ -21,6 +23,8 @@ listen = "127.0.0.1:9090"
 expose_raw_keys = false
 
 [upstream]
+# v0.2 uses plaintext RESP upstream; it has no built-in Redis/Valkey TLS.
+# Keep this path private or use a separately reviewed external tunnel.
 address = "127.0.0.1:6379"
 username = ""
 password = ""
