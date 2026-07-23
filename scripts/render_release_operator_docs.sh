@@ -49,7 +49,7 @@ if ! source_stable_version="$(read_single_export STABLE_VERSION "${source_identi
   echo "could not resolve exactly one source stable identity from ${source_identity_file}" >&2
   exit 1
 fi
-source_candidate_version="$(
+source_chart_version="$(
   awk '
     /^version:[[:space:]]*/ {
       print $2
@@ -78,10 +78,11 @@ if [[ ! "${source_stable_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo "source STABLE_DIGEST is invalid: ${source_stable_digest}" >&2
   exit 1
 fi
-if [[ ! "${source_candidate_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "source chart version is invalid: ${source_candidate_version}" >&2
+if [[ ! "${source_chart_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+  echo "source chart version is invalid: ${source_chart_version}" >&2
   exit 1
 fi
+source_candidate_version="${source_chart_version%%-*}"
 
 output_dir="$1"
 if [[ -e "${output_dir}" ]]; then
@@ -110,14 +111,17 @@ render_document() {
     -v source_stable_commit="${source_stable_commit}" \
     -v source_stable_digest="${source_stable_digest}" \
     -v source_candidate_version="${source_candidate_version}" '
-    function replace_literal(text, old, replacement, position) {
+    function replace_literal(text, old, replacement, position, result, rest) {
       if (old == "" || old == replacement) {
         return text
       }
-      while ((position = index(text, old)) != 0) {
-        text = substr(text, 1, position - 1) replacement substr(text, position + length(old))
+      result = ""
+      rest = text
+      while ((position = index(rest, old)) != 0) {
+        result = result substr(rest, 1, position - 1) replacement
+        rest = substr(rest, position + length(old))
       }
-      return text
+      return result rest
     }
 
     function print_release_identity() {
@@ -467,14 +471,17 @@ render_observability_asset() {
     -v version="${SLIZEN_VERSION}" \
     -v source_stable_version="${source_stable_version}" \
     -v source_candidate_version="${source_candidate_version}" '
-    function replace_literal(text, old, replacement, position) {
+    function replace_literal(text, old, replacement, position, result, rest) {
       if (old == "" || old == replacement) {
         return text
       }
-      while ((position = index(text, old)) != 0) {
-        text = substr(text, 1, position - 1) replacement substr(text, position + length(old))
+      result = ""
+      rest = text
+      while ((position = index(rest, old)) != 0) {
+        result = result substr(rest, 1, position - 1) replacement
+        rest = substr(rest, position + length(old))
       }
-      return text
+      return result rest
     }
     {
       line = $0

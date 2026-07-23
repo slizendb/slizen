@@ -172,14 +172,17 @@ awk -v version="${SLIZEN_VERSION}" \
     RS = ""
     ORS = "\n\n"
   }
-  function replace_literal(text, old, replacement, position) {
+  function replace_literal(text, old, replacement, position, result, rest) {
     if (old == "" || old == replacement) {
       return text
     }
-    while ((position = index(text, old)) != 0) {
-      text = substr(text, 1, position - 1) replacement substr(text, position + length(old))
+    result = ""
+    rest = text
+    while ((position = index(rest, old)) != 0) {
+      result = result substr(rest, 1, position - 1) replacement
+      rest = substr(rest, position + length(old))
     }
-    return text
+    return result rest
   }
   /source-tree release candidate/ {
     next

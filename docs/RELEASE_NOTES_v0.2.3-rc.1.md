@@ -1,8 +1,8 @@
-# Slizen v0.2.3 — Bounded two-hit admission release candidate
+# Slizen v0.2.3-rc.1 — Bounded two-hit admission release candidate
 
-**Release candidate, not a published release.** These notes describe the current v0.2.3 source tree. There is no claimed `v0.2.3` tag, GHCR image, immutable digest, provenance record, or image-bound evidence yet. Until those artifacts pass the release workflow, use the published [v0.2.2 release](https://github.com/slizendb/slizen/releases/tag/v0.2.2) for a verifiable installation.
+**Release candidate, not a published release.** These notes describe the current v0.2.3-rc.1 source tree. There is no claimed `v0.2.3-rc.1` tag, GHCR image, immutable digest, provenance record, or image-bound evidence yet. Until those artifacts pass the release workflow, use the published [v0.2.2 release](https://github.com/slizendb/slizen/releases/tag/v0.2.2) for a verifiable installation.
 
-Slizen v0.2.3 keeps the single-node developer-preview scope while reducing cold-start origin reads for skewed workloads. Redis or Valkey remains authoritative.
+Slizen v0.2.3-rc.1 keeps the single-node developer-preview scope while reducing cold-start origin reads for skewed workloads. Redis or Valkey remains authoritative.
 
 ## What changed
 
@@ -29,7 +29,7 @@ Slizen v0.2.3 keeps the single-node developer-preview scope while reducing cold-
 - Direct writes to the origin are unchanged: they do not notify Slizen and can leave either local tier stale until local TTL expiration. Route supported writes through Slizen where possible and keep TTLs short enough for the workload.
 - Workload JSON consumers should accept the additive `cache_misses_policy_bypass`, `cache_misses_not_admitted`, and `cache_misses_not_present` counters.
 - Existing Prometheus consumers may use the additive `slizen_cache_max_bytes` and `slizen_cache_max_entries` gauges to calculate configured cache utilization. These limits do not represent total Go heap or container RSS.
-- Until a v0.2.3 image exists, the Helm defaults and raw sidecar example deliberately pin the verified v0.2.2 digest. Do not replace it with a guessed or floating v0.2.3 reference.
+- Until a v0.2.3-rc.1 image exists, the Helm defaults and raw sidecar example deliberately pin the verified v0.2.2 digest. Do not replace it with a guessed or floating v0.2.3-rc.1 reference.
 
 ## Local release-candidate evidence
 
@@ -46,7 +46,7 @@ Five local Docker repeats exercised the unchanged cold, request-bound `skew-99-1
 
 Every repeat reached the request limit with zero request failures, value mismatches, final-validation failures, and final-validation mismatches. The p99 ranges do not show a speed win over direct local Valkey. These historical repeats used Slizen's logical `/v1/status` delta and did not capture Redis/Valkey `commandstats`, so the defensible result is approximately 99.15% proxy-side logical GET-call avoidance for this exact skewed workload on this host. It is not proof of physical wire-command reduction under retries, “Slizen makes Redis faster,” a production capacity number, or a universal 99% guarantee.
 
-These measurements came from a local source-tree candidate. Published v0.2.3 evidence must be regenerated from the exact immutable image digest after the tag passes the full release gate.
+These measurements came from a local source-tree candidate. Published v0.2.3-rc.1 evidence must be regenerated from the exact immutable image digest after the tag passes the full release gate.
 
 ## Release gate before publication
 

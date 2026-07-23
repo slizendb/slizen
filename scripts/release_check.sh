@@ -173,7 +173,7 @@ docker info >/dev/null 2>&1 || {
 }
 
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-slizen-release-check-$$}"
-export SLIZEN_VERSION="${SLIZEN_VERSION:-0.2.3}"
+export SLIZEN_VERSION="${SLIZEN_VERSION:-0.2.3-rc.1}"
 export SLIZEN_COMMIT="${SLIZEN_COMMIT:-$(release_commit)}"
 export SLIZEN_VALKEY_PORT="${SLIZEN_VALKEY_PORT:-16379}"
 export SLIZEN_PROXY_PORT="${SLIZEN_PROXY_PORT:-16380}"

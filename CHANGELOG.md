@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2.3 - 2026-07-23 - Release Candidate: Bounded Two-Hit Admission
+## v0.2.3-rc.1 - 2026-07-23 - Release Candidate: Bounded Two-Hit Admission
 
 Release status: candidate source tree. No `v0.2.3` tag, published image, immutable digest, or image-bound release evidence is claimed yet.
 
