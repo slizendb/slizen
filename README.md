@@ -12,7 +12,7 @@ Slizen v0.2 is single-node, not a source of truth, and has limited Redis compati
 
 **Evidence, not a speed claim.** In the reproducible, image-bound v0.2.2 synthetic 1,000-key 99/1-skew run, Slizen measured **89.778% fewer logical upstream GET calls** (`94,961` direct successful GETs versus `9,707` Slizen calls), a `73.628%` cache-hit ratio, and zero request failures, value mismatches, or final-validation failures or mismatches. That historical artifact did not capture Redis/Valkey `commandstats`, so the reduction is a proxy-side estimate rather than proof of physical wire-command volume. Attributed read p99 was `2.137 ms` through Slizen versus `1.460 ms` direct, so this does not claim that Slizen was faster. See the [raw release JSON](https://github.com/slizendb/slizen/releases/download/v0.2.2/slizen-workload-result.json) and [methodology](docs/BENCHMARKING.md); results are specific to that runner, configuration, and workload.
 
-**v0.2.3-rc.1 source-tree release candidate.** Bounded two-hit admission and exact-SET refresh for already admitted keys reduced logical upstream GET calls from `94,961` direct successful GETs to `798`–`803` across five unchanged local cold 99/1 repeats (`99.154390%`–`99.159655%` proxy-side avoidance) with zero failures or mismatches. Those historical local repeats also predate physical `commandstats` capture. Slizen read p99 was `1.175`–`1.251 ms` versus `0.986`–`1.042 ms` direct, so this is neither a speed claim nor a universal 99% guarantee. This is local candidate evidence, not a tag, published image, digest, or image-bound release result; the stable install and links below remain v0.2.2 until publication. See the [candidate notes](docs/RELEASE_NOTES_v0.2.3-rc.1.md).
+**v0.2.3-rc.1 prerelease for staging trials.** The exact published image reduced physical origin GETs by `97.516%`, `97.969%`, `99.201%`, and `99.130%` in the four isolated 100,000-operation workloads, with zero request failures, value mismatches, or validation failures/mismatches. Direct p99 remained lower in every scenario, so this is an upstream-load result, not a speed claim or universal 99% guarantee. The release-bound Helm chart, sidecar manifest, checksums, provenance, and raw evidence are attached to the [GitHub prerelease](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1). Stable aliases and the default install below remain on v0.2.2 until an external staging trial passes.
 
 We are looking for three design partners with real Redis or Valkey hot-key incidents. If you can test a single-node developer preview in an isolated environment, [describe the workload without sensitive data](https://github.com/slizendb/slizen/issues/new?template=design-partner.yml).
 
@@ -318,7 +318,7 @@ Release prep:
 - [docs/RELEASE_NOTES_v0.2.md](docs/RELEASE_NOTES_v0.2.md)
 - [docs/RELEASE_NOTES_v0.2.1.md](docs/RELEASE_NOTES_v0.2.1.md)
 - [docs/RELEASE_NOTES_v0.2.2.md](docs/RELEASE_NOTES_v0.2.2.md)
-- [docs/RELEASE_NOTES_v0.2.3-rc.1.md](docs/RELEASE_NOTES_v0.2.3-rc.1.md) — source-tree release candidate
+- [docs/RELEASE_NOTES_v0.2.3-rc.1.md](docs/RELEASE_NOTES_v0.2.3-rc.1.md) — published staging prerelease
 
 ## Limitations
 
@@ -334,7 +334,7 @@ Release prep:
 
 ## Roadmap
 
-The [v0.2.2 performance release](https://github.com/slizendb/slizen/releases/tag/v0.2.2) was published on 2026-07-22 with a checksummed image-bound bundle and separate 100,000-key evidence. v0.2.3-rc.1 is only a source-tree release candidate: its bounded two-hit admission, exact-SET refresh, and fixed miss attribution are implemented and locally repeated, while clean-commit release validation, tag, image, provenance, and exact-image evidence remain open. v0.3 moves direct-origin invalidation forward with Redis/Valkey server-assisted tracking and fail-safe behavior. Mesh, an Operator, and a hosted control plane are later hypotheses that require evidence from real users rather than version promises.
+The [v0.2.2 performance release](https://github.com/slizendb/slizen/releases/tag/v0.2.2) remains the stable public install. [v0.2.3-rc.1](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1) was published on 2026-07-23 with a checksummed release-bound chart, sidecar manifest, exact-image physical-origin evidence, and verified provenance. It remains a staging prerelease until a team unfamiliar with Slizen independently passes the installation, rollback, failure-drill, and soak gate. v0.3 moves direct-origin invalidation forward with Redis/Valkey server-assisted tracking and fail-safe behavior. Mesh, an Operator, and a hosted control plane are later hypotheses that require evidence from real users rather than version promises.
 
 Gossip does not provide write consensus. Slizen remains a cache layer.
 

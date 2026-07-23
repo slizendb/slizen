@@ -58,3 +58,25 @@ The canonical image-bound 99/1 run reached the request limit in both phases with
 - [x] GitHub-native provenance verifies for the published digest, and the image-bound evidence manifest binds the same version, commit, and digest.
 - [x] GitHub Release contains `docs/RELEASE_NOTES_v0.2.2.md`, `SHA256SUMS`, the complete checksummed image evidence bundle, and both extended-validation artifacts.
 - [x] The verified digest and workflow runs are recorded here and in the release notes; the roadmap, README evidence summary, and staging guide carry their corresponding release status, evidence, and immutable deployment pin.
+
+## v0.2.3-rc.1 staging prerelease
+
+Status: published on 2026-07-23. The annotated `v0.2.3-rc.1` tag resolves to
+commit `7662a1fb5974a6fc369ca486d2a59c85f68cd3b7`; the verified
+multi-architecture image index is
+`sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a`.
+The tagged-source and publish jobs in the
+[release workflow](https://github.com/slizendb/slizen/actions/runs/30007036784)
+are green. The checksummed release-bound chart, raw sidecar manifest, exact-image
+evidence, and known limitations are attached to the
+[GitHub prerelease](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1).
+
+- [x] PR #17 closed the engineering staging-readiness blockers and passed all required CI checks.
+- [x] PR #18 aligned the source, chart, CLI, checklist, and artifact contract with the exact prerelease identity and passed all required CI checks.
+- [x] The annotated tag and GHCR `v0.2.3-rc.1` image resolve to the intended full commit and digest for both `linux/amd64` and `linux/arm64`.
+- [x] Tagged-source release validation and exact-image physical `INFO commandstats` evidence passed with zero request failures, value mismatches, validation failures, or validation mismatches.
+- [x] Physical origin GET reduction was 97.516% uniform, 97.969% skew-80/20, 99.201% skew-99/1, and 99.130% moving-flash; direct p99 remained lower in every scenario, so no speed or universal 99% claim is made.
+- [x] GitHub-native provenance verifies for the image, release-bound Helm chart, and raw sidecar manifest.
+- [x] Every attached release asset matches `SHA256SUMS`.
+- [x] Stable aliases `0.2` and `latest` remain on v0.2.2 digest `sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627`.
+- [ ] A team unfamiliar with Slizen independently completes the <=30-minute install, <5-minute rollback, failure drills, and soak gate.

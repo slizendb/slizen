@@ -1,6 +1,6 @@
 # Slizen v0.2.3-rc.1 — Bounded two-hit admission release candidate
 
-**Release candidate, not a published release.** These notes describe the current v0.2.3-rc.1 source tree. There is no claimed `v0.2.3-rc.1` tag, GHCR image, immutable digest, provenance record, or image-bound evidence yet. Until those artifacts pass the release workflow, use the published [v0.2.2 release](https://github.com/slizendb/slizen/releases/tag/v0.2.2) for a verifiable installation.
+**Published prerelease for external staging trials, not a production-readiness claim.** The annotated `v0.2.3-rc.1` tag resolves to commit `7662a1fb5974a6fc369ca486d2a59c85f68cd3b7`; the verified multi-architecture image index is `sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a`. Checksums, provenance, release-bound deployment artifacts, and exact-image evidence are attached to the [GitHub prerelease](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1).
 
 Slizen v0.2.3-rc.1 keeps the single-node developer-preview scope while reducing cold-start origin reads for skewed workloads. Redis or Valkey remains authoritative.
 
@@ -29,31 +29,34 @@ Slizen v0.2.3-rc.1 keeps the single-node developer-preview scope while reducing 
 - Direct writes to the origin are unchanged: they do not notify Slizen and can leave either local tier stale until local TTL expiration. Route supported writes through Slizen where possible and keep TTLs short enough for the workload.
 - Workload JSON consumers should accept the additive `cache_misses_policy_bypass`, `cache_misses_not_admitted`, and `cache_misses_not_present` counters.
 - Existing Prometheus consumers may use the additive `slizen_cache_max_bytes` and `slizen_cache_max_entries` gauges to calculate configured cache utilization. These limits do not represent total Go heap or container RSS.
-- Until a v0.2.3-rc.1 image exists, the Helm defaults and raw sidecar example deliberately pin the verified v0.2.2 digest. Do not replace it with a guessed or floating v0.2.3-rc.1 reference.
+- The source Helm defaults and raw sidecar example deliberately remain pinned to verified stable v0.2.2. Use the release-bound chart or raw manifest asset for a v0.2.3-rc.1 trial; each pins the exact prerelease digest above. Do not replace it with a floating reference.
 
-## Local release-candidate evidence
+## Exact-image evidence
 
-Five local Docker repeats exercised the unchanged cold, request-bound `skew-99-1` scenario with seed 42, 1,000 keys, 100,000 generated operations per phase, a 95/5 read/write mix, 128-byte values, and concurrency 32.
+The published digest was tested against Valkey 8.1.9 with four isolated,
+100,000-operation scenarios:
 
-| Metric | Five-repeat result |
-| --- | ---: |
-| Direct successful GETs | 94,961 in every run |
-| Slizen logical upstream GET calls | 798–803 |
-| Proxy-side logical-call avoidance | 99.154390%–99.159655% |
-| Cache-hit ratio | 99.121745%–99.151231% |
-| Slizen read p99 | 1.175–1.251 ms |
-| Direct read p99 | 0.986–1.042 ms |
+| Scenario | Physical origin GET reduction | Cache hit ratio | Direct p99 | Slizen p99 |
+| --- | ---: | ---: | ---: | ---: |
+| uniform | 97.516% | 97.487% | 1.082 ms | 1.819 ms |
+| skew-80/20 | 97.969% | 97.959% | 1.211 ms | 1.889 ms |
+| skew-99/1 | 99.201% | 99.182% | 1.530 ms | 2.049 ms |
+| moving-flash | 99.130% | 99.096% | 7.108 ms | 8.979 ms |
 
-Every repeat reached the request limit with zero request failures, value mismatches, final-validation failures, and final-validation mismatches. The p99 ranges do not show a speed win over direct local Valkey. These historical repeats used Slizen's logical `/v1/status` delta and did not capture Redis/Valkey `commandstats`, so the defensible result is approximately 99.15% proxy-side logical GET-call avoidance for this exact skewed workload on this host. It is not proof of physical wire-command reduction under retries, “Slizen makes Redis faster,” a production capacity number, or a universal 99% guarantee.
+All scenarios used same-`run_id`, monotonic Redis/Valkey `INFO commandstats`
+deltas and had zero request failures, value mismatches, validation failures, or
+validation mismatches. Direct p99 remained lower in all four scenarios. The
+defensible product result is reduced physical upstream GET load for these exact
+workloads, not that Slizen makes Redis or Valkey faster and not that every
+workload receives a 99% reduction.
 
-These measurements came from a local source-tree candidate. Published v0.2.3-rc.1 evidence must be regenerated from the exact immutable image digest after the tag passes the full release gate.
+## Release verification
 
-## Release gate before publication
-
-- Run formatting, vet, unit, race, build, Docker smoke, Kubernetes rendering, and the complete four-scenario request-bound workload gate from one clean intended commit.
-- Confirm every scenario has exact sample accounting and zero request or value-validation failures.
-- Confirm the stable 99/1 scenario includes fixed miss attribution and positive physical origin reduction from a same-`run_id`, monotonic `INFO commandstats` delta. The gate intentionally has no latency or universal 99% threshold.
-- Publish only after the tagged source succeeds, then bind the image digest, full commit, version, workload JSON, demo report, checksums, and provenance in the release evidence bundle.
+- The tagged source passed formatting, vet, unit, race, build, Docker smoke, Kubernetes rendering, and the complete four-scenario release gate.
+- The release workflow published `linux/amd64` and `linux/arm64` images, then generated evidence against the exact resulting digest.
+- GitHub-native provenance verifies for the image, release-bound Helm chart, and raw sidecar manifest.
+- `SHA256SUMS` covers every attached evidence and deployment artifact.
+- Prerelease publication left the stable `latest` and `0.2` aliases on the verified v0.2.2 digest.
 
 ## Known limitations
 

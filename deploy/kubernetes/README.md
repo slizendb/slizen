@@ -63,8 +63,15 @@ The stable public image is v0.2.2:
 ghcr.io/slizendb/slizen@sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627
 ```
 
-v0.2.3 is still a source-tree release candidate. Do not apply a floating
-`:0.2.3` reference or claim that a v0.2.3 digest exists.
+v0.2.3-rc.1 is published for staging trials at:
+
+```text
+ghcr.io/slizendb/slizen@sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a
+```
+
+Use the release-bound raw sidecar asset from the
+[GitHub prerelease](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1);
+do not apply a floating tag.
 
 Follow [the staging runbook](../../docs/STAGING_ROLLOUT.md) for compatibility,
 thresholds, soak windows, canary expansion, and the mandatory endpoint-first

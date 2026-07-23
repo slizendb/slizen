@@ -53,11 +53,14 @@ test "$HELM_VERSION" = v3.18.4 ||
   test "$HELM_VERSION" = "${REVIEWED_HELM_VERSION:-}"
 ```
 
-The runtime and deployment source are separate identities: the current chart
-commit deliberately deploys the last verified public runtime digest until
-v0.2.3 is published. Only set `REVIEWED_HELM_VERSION` before this session when
-the platform owner has reviewed that exact version's `--atomic`, wait, and
-timeout behavior. Otherwise the executable check stops the install.
+The runtime and deployment source are separate identities: the source chart
+deliberately keeps the stable v0.2.2 runtime digest. For a v0.2.3-rc.1 trial,
+download and verify the release-bound chart from the
+[published prerelease](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1)
+instead of using this source-chart quickstart unchanged. Only set
+`REVIEWED_HELM_VERSION` before this session when the platform owner has reviewed
+that exact version's `--atomic`, wait, and timeout behavior. Otherwise the
+executable check stops the install.
 
 ## 2. Prepare one reviewed values file
 
