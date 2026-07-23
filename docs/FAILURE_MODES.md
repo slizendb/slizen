@@ -11,15 +11,15 @@ The stable public image is currently v0.2.2:
 ghcr.io/slizendb/slizen@sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627
 ```
 
-v0.2.3 is a source-tree release candidate. It has no published image digest or
-image-bound release evidence yet. Unless a row says otherwise, the contract
-below is the common behavior of the stable v0.2.2 image and the v0.2.3
-candidate. Candidate-only behavior must not be used as evidence for a v0.2.2
-trial.
+v0.2.3-rc.1 is a published staging prerelease at image index
+`sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a`.
+Unless a row says otherwise, the contract below is the common behavior of the
+stable v0.2.2 image and the v0.2.3-rc.1 prerelease. RC-only behavior must not be
+used as evidence for a v0.2.2 trial.
 
 The important version differences are:
 
-| Area | Stable v0.2.2 | v0.2.3 source candidate |
+| Area | Stable v0.2.2 | v0.2.3-rc.1 prerelease |
 | --- | --- | --- |
 | Cache layout | One bounded local LRU. | Bounded probationary and protected tiers share the configured global limits. |
 | Hotness tracking at capacity | Reuses the next bounded admission slot, which can evict HOT tracking state and remove that key's local cache entry. | Gives a HOT victim a second chance and drops that unseen observation instead; exposes a capacity-drop counter. |

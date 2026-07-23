@@ -14,18 +14,21 @@ image:
 ghcr.io/slizendb/slizen@sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627
 ```
 
-v0.2.3 is a source-tree release candidate. Do not describe `:0.2.3` as a
-published image and do not invent a v0.2.3 digest. Use the stable digest above
-for an external trial until the v0.2.3 release workflow publishes and verifies
-its own immutable image. Candidate-only metrics and cache behavior are called
-out explicitly below; do not use source-tree behavior as evidence for a v0.2.2
-deployment.
+The v0.2.3-rc.1 staging prerelease is published at commit
+`7662a1fb5974a6fc369ca486d2a59c85f68cd3b7` and image index
+`sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a`.
+Use its release-bound chart or raw sidecar from the
+[GitHub prerelease](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1)
+for an RC trial. The source chart and stable aliases intentionally remain on
+v0.2.2; do not use a floating image reference or treat RC behavior as evidence
+for a v0.2.2 deployment.
 
 Record two identities separately: the executable runtime
 (release tag + stamped full commit + image digest) and the deployment source
 (chart/manifest/config pushed commit + version + exact values/render hash). A
-v0.2.3 chart commit can intentionally deploy the stable v0.2.2 image; that is a
-valid two-artifact mapping, not one shared commit.
+v0.2.3-rc.1 source chart commit can intentionally deploy the stable v0.2.2
+image; that is a valid two-artifact mapping, not one shared commit. The
+release-bound RC chart instead pins the exact RC digest above.
 
 Read [FAILURE_MODES.md](FAILURE_MODES.md) before the change window and record the
 result with [STAGING_RELEASE_GATE.md](STAGING_RELEASE_GATE.md).
@@ -430,13 +433,13 @@ reconnect rates remain inside the pre-agreed budgets. A shorter value that
 causes routine pool churn is a no-go configuration even when requests
 eventually succeed.
 
-After v0.2.3 is published, its image includes the offline command-catalog gate.
+The published v0.2.3-rc.1 image includes the offline command-catalog gate.
 Review the exact argument shapes for commands reported with limitations before
-acknowledging them. Pin the verified immutable digest and override the image's
+acknowledging them. Pin its verified immutable digest and override the image's
 normal `slizend` entrypoint:
 
 ```sh
-export SLIZEN_IMAGE=ghcr.io/slizendb/slizen@sha256:REPLACE_WITH_VERIFIED_PUBLISHED_DIGEST
+export SLIZEN_IMAGE=ghcr.io/slizendb/slizen@sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a
 docker run --rm --entrypoint /usr/local/bin/slizenctl \
   "$SLIZEN_IMAGE" version
 docker run --rm --entrypoint /usr/local/bin/slizenctl \

@@ -13,8 +13,10 @@ a new component in its Redis data path.
 The stable public image is v0.2.2 at commit
 `74a12767deb72db9bc78bebd807cbe8717fa572c` and image index
 `sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627`.
-v0.2.3 remains a source-tree release candidate until its tag, immutable image,
-provenance, and image-bound evidence exist.
+The v0.2.3-rc.1 staging prerelease is published at commit
+`7662a1fb5974a6fc369ca486d2a59c85f68cd3b7` and image index
+`sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a`.
+Its immutable identity is verified; self-service staging is not yet proven.
 
 ## Result definitions
 
@@ -90,21 +92,20 @@ team's normal change record:
 Do not attach Redis values, passwords, complete sensitive keys, or Secret
 contents.
 
-## Current candidate disposition
+## Current prerelease disposition
 
 Until a fresh operator runs this gate, Slizen may have a green engineering
-release check without having a self-service staging **pass**. In particular,
-v0.2.3 cannot pass immutable identity while it remains untagged and unpublished.
-Describe it as a release candidate, and use the stable v0.2.2 runtime digest for
-a reproducible external staging trial. A pushed, clean v0.2.3 chart/config
-commit may package that older stable runtime when the evidence records both
-artifacts separately; it does not turn the candidate code into a published
-runtime.
+release check without having a self-service staging **pass**. v0.2.3-rc.1 now
+passes the immutable-identity portion: its tag, commit, multi-architecture image
+digest, release-bound chart/raw manifest, checksums, and provenance are public.
+Use those prerelease assets for the external RC trial. A source checkout may
+still package the older stable runtime; record runtime and deployment identities
+separately.
 
 The observability pack is intentionally mixed-version. Core request, upstream,
 latency, cache usage/eviction, coalescing, invalidation, and oversized-key
 signals exist in v0.2.2. Cache miss reasons, configured max gauges, and the
-capacity-drop counter are v0.2.3 candidate additions. A v0.2.2 pass must use the
+capacity-drop counter are v0.2.3-rc.1 additions. A v0.2.2 pass must use the
 stable core signals plus an external record/comparison of configured limits;
 missing candidate-only series never means zero pressure or complete telemetry.
 

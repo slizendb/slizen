@@ -190,7 +190,7 @@ render_document() {
     }
 
     document_name == "STAGING_RELEASE_GATE.md" &&
-      /^## Current candidate disposition/ {
+      /^## Current (candidate|prerelease) disposition/ {
       print "## Current release disposition"
       print ""
       print "This package has immutable runtime and chart identity. A self-service staging"
@@ -440,7 +440,9 @@ render_document() {
       line = replace_literal(line, "the stable v" source_stable_version, "an earlier v0.2 release")
       line = replace_literal(line, "The published v" source_stable_version, "An earlier published v0.2 release")
       line = replace_literal(line, "v" source_stable_version, "an earlier v0.2 release")
+      line = replace_literal(line, "v" version, "__SLIZEN_EXACT_RELEASE_VERSION__")
       line = replace_literal(line, "v" source_candidate_version, "v" version)
+      line = replace_literal(line, "__SLIZEN_EXACT_RELEASE_VERSION__", "v" version)
       line = replace_literal(line, "Candidate-only", "Release-specific")
       line = replace_literal(line, "candidate-only", "release-specific")
       line = replace_literal(line, "source-tree", "development-source")
@@ -494,7 +496,9 @@ render_observability_asset() {
       line = replace_literal(line, "Oversized drops exist in v" source_stable_version "; capacity drops require v" version ".", "This release exports both oversized-key and tracker-capacity drops.")
       line = replace_literal(line, "works with v" source_stable_version " and", "works with v" version " and")
       line = replace_literal(line, "v" source_stable_version, "an earlier v0.2 release")
+      line = replace_literal(line, "v" version, "__SLIZEN_EXACT_RELEASE_VERSION__")
       line = replace_literal(line, "v" source_candidate_version, "v" version)
+      line = replace_literal(line, "__SLIZEN_EXACT_RELEASE_VERSION__", "v" version)
       line = replace_literal(line, "candidate-only", "release-specific")
       line = replace_literal(line, "candidate", "release")
       print line

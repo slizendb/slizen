@@ -12,9 +12,10 @@ prefixes, credentials, and user-provided command names do not become labels.
 ## Version scope
 
 The dashboard and rule file can be loaded for either the stable v0.2.2 image or
-the v0.2.3 source candidate, but not every series exists in both:
+the published v0.2.3-rc.1 staging prerelease, but not every series exists in
+both:
 
-| Signal | Stable v0.2.2 | v0.2.3 source candidate |
+| Signal | Stable v0.2.2 | v0.2.3-rc.1 prerelease |
 | --- | --- | --- |
 | Requests, request/upstream latency, upstream requests/errors | yes | yes |
 | Aggregate cache hits/misses, bytes, entries, evictions | yes | yes |

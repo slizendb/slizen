@@ -173,7 +173,7 @@ Five local Docker repeats used the unchanged cold request-bound command below in
 | Slizen read p99 | 1.175–1.251 ms |
 | Direct read p99 | 0.986–1.042 ms |
 
-All ten measured phases reached exactly 100,000 generated operations with zero request failures, value mismatches, final-validation failures, and final-validation mismatches. This result crosses 99% proxy-side logical-call avoidance for this exact local workload, but it predates physical commandstats capture and does not prove wire-command reduction. It is neither a pass threshold for the full release suite nor a guarantee for uniform, moving, write-heavy, or real production traffic. Direct p99 remained lower in these repeats, so there is no Redis-acceleration claim. These are source-tree release-candidate measurements; immutable image-bound v0.2.3 evidence does not exist until publication.
+All ten measured phases reached exactly 100,000 generated operations with zero request failures, value mismatches, final-validation failures, and final-validation mismatches. This result crosses 99% proxy-side logical-call avoidance for this exact local workload, but it predates physical commandstats capture and does not prove wire-command reduction. It is neither a pass threshold for the full release suite nor a guarantee for uniform, moving, write-heavy, or real production traffic. Direct p99 remained lower in these repeats, so there is no Redis-acceleration claim. These remain historical source-tree measurements; the published v0.2.3-rc.1 prerelease now has separate immutable-image, physical-commandstats evidence in its [release assets](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1).
 
 ## v0.2 Workload Harness
 

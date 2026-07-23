@@ -20,8 +20,10 @@ check is necessary but does not by itself prove self-service staging adoption.
 
 The stable public install target remains v0.2.2 at image index
 `sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627`.
-v0.2.3 remains a source-tree release candidate until its immutable artifacts
-are published and verified.
+v0.2.3-rc.1 is published for external staging trials at image index
+`sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a`.
+The stable public install remains v0.2.2 until the self-service staging gate
+passes.
 
 Staging-adoption closure:
 
@@ -117,7 +119,7 @@ Release gate: the complete v0.2.1 safety contract remains green, the fixed-size 
 
 ## v0.2.3: Bounded two-hit admission
 
-Status: v0.2.3-rc.1 release candidate in the source tree; not tagged or published. No v0.2.3-rc.1 image digest or image-bound release evidence exists yet.
+Status: v0.2.3-rc.1 published as a staging prerelease on 2026-07-23. The tag, exact image digest, checksummed release-bound deployment artifacts, provenance, and physical-origin workload evidence are public; the external self-service staging gate remains open.
 
 Implementation:
 
@@ -129,7 +131,7 @@ Implementation:
 - [x] Attribute misses with fixed bounded `policy_bypass`, `not_admitted`, and `not_present` counters in status and workload evidence.
 - [x] Protect the current HOT FIFO tracker victim with O(1) capacity-drop behavior and expose incomplete telemetry through `capacity_observations_dropped` and `slizen_hotness_capacity_observations_dropped_total`.
 - [x] Record five unchanged cold request-bound 99/1 local Docker repeats with 798–803 Slizen logical upstream GET calls versus 94,961 direct successful GETs, 99.154390–99.159655% proxy-side avoidance, zero failures or mismatches, and no speed or physical-command claim.
-- [ ] Replace historical proxy-side estimates with release evidence backed by same-`run_id`, monotonic Redis/Valkey `INFO commandstats` deltas from the exact published image.
+- [x] Replace historical proxy-side estimates with release evidence backed by same-`run_id`, monotonic Redis/Valkey `INFO commandstats` deltas from the exact published image.
 - [x] Add an offline version-and-commit-bound compatibility report with a non-zero CI gate for explicitly supplied rejected or unsupported commands.
 - [x] Require explicit acknowledgement for command names whose supported argument shapes are narrower than Redis.
 - [x] Ship an import-ready Grafana dashboard, conservative Prometheus staging alerts, active-connection and cache-capacity gauges, and bounded runtime/process metrics.
@@ -138,15 +140,15 @@ Implementation:
 
 Release closure:
 
-- [ ] Pass the full clean-commit Go, race, Docker, Kubernetes, and four-scenario request-bound release gate.
-- [ ] Publish and verify the `v0.2.3-rc.1` tag, GHCR digest, provenance, and exact-image evidence bundle.
-- [ ] Replace release-candidate wording only after those immutable artifacts exist.
+- [x] Pass the full clean-commit Go, race, Docker, Kubernetes, and four-scenario request-bound release gate.
+- [x] Publish and verify the `v0.2.3-rc.1` tag, GHCR digest, provenance, and exact-image evidence bundle.
+- [x] Replace pre-publication wording after those immutable artifacts exist.
 
 Release gate: the v0.2.2 safety and attribution contract remains green; cache tier totals stay within the configured global budgets; stale-refill and write races remain deterministic; and published performance statements distinguish origin-load reduction from end-to-end speed.
 
-Staging gate: do not promote this candidate merely because its synthetic origin
-reduction improved. It must first acquire a real published digest, then pass the
-same self-service staging and rollback evidence as the stable install target.
+Staging gate: do not promote this prerelease merely because its synthetic origin
+reduction improved. It now has a real published digest, but must still pass the
+self-service staging and rollback evidence before stable v0.2.3.
 
 ## v0.3: Direct-origin invalidation safety
 

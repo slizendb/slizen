@@ -27,14 +27,20 @@ The stable public image is v0.2.2:
 ghcr.io/slizendb/slizen@sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627
 ```
 
-v0.2.3 is a source-tree release candidate, not a published image. Never derive
-or guess its digest. Verify a newer release exists before changing
-`image.digest`.
+v0.2.3-rc.1 is a published staging prerelease:
+
+```text
+ghcr.io/slizendb/slizen@sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a
+```
+
+Use the release-bound `slizen-0.2.3-rc.1.tgz` asset from the
+[GitHub prerelease](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1)
+for an RC trial. Do not replace `image.digest` with a floating tag.
 
 The source chart has candidate `version: 0.2.3-rc.1`, but its `appVersion`, default
 image tag, digest, and rendered application label intentionally remain
-`0.2.2`. When v0.2.3 is published, release closure must update all four runtime
-identity surfaces to the verified v0.2.3 artifact together.
+`0.2.2`. This keeps source-tree installs stable; the published RC chart aligns
+all four runtime identity surfaces with v0.2.3-rc.1 and its exact digest.
 
 Helm cannot inject a sidecar into an existing Deployment. Use
 `deploy/kubernetes/observe-sidecar.yaml` as the concrete sidecar pattern, or

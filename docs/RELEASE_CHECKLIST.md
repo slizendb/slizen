@@ -1,6 +1,6 @@
 # Release Checklist
 
-Current state: v0.2.3-rc.1 release candidate. Do not describe it as released or record a tag, image digest, provenance result, or image-bound evidence until the corresponding steps below succeed.
+Current state: v0.2.3-rc.1 published as a staging prerelease on 2026-07-23. The annotated tag resolves to commit `7662a1fb5974a6fc369ca486d2a59c85f68cd3b7`; the verified multi-architecture image index is `sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a`.
 
 ## Before Release
 
@@ -39,10 +39,9 @@ make validate-k8s
 Confirm the raw sidecar example and default Helm render use `observe` mode, loopback admin access, bounded resources, exec probes, and a documented endpoint rollback. Confirm the chart renders no `ServiceMonitor` unless explicitly enabled.
 
 The chart and raw manifest in the tagged source may still default to the latest
-previously published image (currently v0.2.2). This is intentional: do not guess
-the v0.2.3-rc.1 digest, edit the tag after it was pushed, or make the source default
-refer to an image that does not exist yet. The publish job derives the exact
-digest from the successful registry push and runs
+previously published stable image (currently v0.2.2). This is intentional:
+prerelease publication does not move stable source defaults. The publish job
+derived the exact v0.2.3-rc.1 digest from the successful registry push and ran
 `scripts/package_release_artifacts.sh` from the clean tagged checkout. The
 packager verifies that the supplied full commit equals both `HEAD` and the
 `v0.2.3-rc.1` tag before copying source into its private staging directory.
@@ -85,7 +84,7 @@ generated release artifacts.
 - `docs/REDIS_COMPATIBILITY.md` matches command handling.
 - `docs/BENCHMARKING.md` explains how to reproduce the benchmark.
 - `docs/STAGING_ROLLOUT.md` contains observe-to-cache and rollback gates.
-- `docs/RELEASE_NOTES_v0.2.3-rc.1.md` is ready to paste into GitHub Releases and still says release candidate before publication.
+- `docs/RELEASE_NOTES_v0.2.3-rc.1.md` records the published prerelease identity, evidence, and limitations.
 
 ## Tag
 
@@ -96,12 +95,12 @@ git push origin v0.2.3-rc.1
 
 ## GitHub Release Notes
 
-Use `docs/RELEASE_NOTES_v0.2.3-rc.1.md`. After the workflow succeeds, replace its release-candidate artifact warning with verified facts. Attach `slizen-0.2.3-rc.1.tgz`, `slizen-observe-sidecar-0.2.3-rc.1.yaml`, `release-evidence-manifest.json`, `SHA256SUMS`, and the remaining immutable-image evidence files to the GitHub prerelease. Record the image digest in `docs/PUBLIC_RELEASE_CHECKLIST.md` and `docs/STAGING_ROLLOUT.md`.
+The [GitHub prerelease](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1) uses `docs/RELEASE_NOTES_v0.2.3-rc.1.md` and contains `slizen-0.2.3-rc.1.tgz`, `slizen-observe-sidecar-0.2.3-rc.1.yaml`, `release-evidence-manifest.json`, `SHA256SUMS`, and the remaining immutable-image evidence files.
 
 Verify GitHub-native provenance for the image and both deployment artifacts:
 
 ```sh
-export RELEASE_DIGEST=sha256:REPLACE_WITH_VERIFIED_PUBLISHED_DIGEST
+export RELEASE_DIGEST=sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a
 gh attestation verify "oci://ghcr.io/slizendb/slizen@$RELEASE_DIGEST" \
   --repo slizendb/slizen
 gh attestation verify ./slizen-0.2.3-rc.1.tgz \

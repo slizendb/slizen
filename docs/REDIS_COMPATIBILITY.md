@@ -2,8 +2,8 @@
 
 Slizen v0.2 is a Redis-compatible read proxy for a deliberately small command
 subset. Redis or Valkey remains the source of truth. The table below is the
-complete command contract in the current v0.2.3 source-tree candidate; any other command is classified as `unsupported`. The published v0.2.2 image has
-the same command-name subset, but it predates the offline compatibility-report
+complete command contract in the published v0.2.3-rc.1 prerelease; any other command is classified as `unsupported`. The published v0.2.2 image has the
+same command-name subset, but it predates the offline compatibility-report
 command and the v0.2.3 pre-dispatch invalidation/epoch refinements.
 
 | Command | Status | Behavior | Tested |
@@ -91,11 +91,11 @@ Published Slizen images stamp both fields. An ad hoc local binary built without
 the release linker flags reports `binary_commit: "unknown"` and is not
 immutable deployment evidence.
 
-No standalone CLI archive is published today. After v0.2.3 has a verified
-image digest, run the CLI embedded in that exact image and retain its report:
+No standalone CLI archive is published today. For a v0.2.3-rc.1 trial, run the
+CLI embedded in the verified prerelease image and retain its report:
 
 ```sh
-export SLIZEN_IMAGE=ghcr.io/slizendb/slizen@sha256:REPLACE_WITH_VERIFIED_DIGEST
+export SLIZEN_IMAGE=ghcr.io/slizendb/slizen@sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a
 docker run --rm --entrypoint /usr/local/bin/slizenctl \
   "$SLIZEN_IMAGE" version
 docker run --rm --entrypoint /usr/local/bin/slizenctl \

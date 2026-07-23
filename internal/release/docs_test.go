@@ -106,15 +106,16 @@ func TestCanonicalReleaseIdentity(t *testing.T) {
 	assertContains(filepath.Join("deploy", "kubernetes", "observe-sidecar.yaml"), "image: ghcr.io/slizendb/slizen@sha256:")
 }
 
-func TestReleaseCandidateDocsDoNotClaimPublishedArtifacts(t *testing.T) {
+func TestReleaseCandidateDocsRecordPublishedPrerelease(t *testing.T) {
 	root := repoRoot(t)
 	checks := []struct {
 		name  string
 		wants []string
 	}{
-		{filepath.Join("docs", "RELEASE_NOTES_v0.2.3-rc.1.md"), []string{"Release candidate, not a published release", "94,961", "798–803", "99.154390%–99.159655%", "not proof of physical wire-command reduction"}},
-		{filepath.Join("docs", "ROADMAP.md"), []string{"Status: v0.2.3-rc.1 release candidate in the source tree; not tagged or published", "Publish and verify the `v0.2.3-rc.1` tag"}},
-		{"README.md", []string{"releases/download/v0.2.2/slizen-workload-result.json", "v0.2.3-rc.1 source-tree release candidate"}},
+		{filepath.Join("docs", "RELEASE_NOTES_v0.2.3-rc.1.md"), []string{"Published prerelease for external staging trials", "sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a", "97.516%", "99.201%", "Direct p99 remained lower"}},
+		{filepath.Join("docs", "ROADMAP.md"), []string{"Status: v0.2.3-rc.1 published as a staging prerelease", "exact image digest", "external self-service staging gate remains open"}},
+		{"README.md", []string{"releases/download/v0.2.2/slizen-workload-result.json", "v0.2.3-rc.1 prerelease for staging trials", "releases/tag/v0.2.3-rc.1"}},
+		{filepath.Join("docs", "PUBLIC_RELEASE_CHECKLIST.md"), []string{"## v0.2.3-rc.1 staging prerelease", "actions/runs/30007036784", "Stable aliases `0.2` and `latest` remain on v0.2.2"}},
 	}
 	for _, check := range checks {
 		data, err := os.ReadFile(filepath.Join(root, check.name))
@@ -123,7 +124,16 @@ func TestReleaseCandidateDocsDoNotClaimPublishedArtifacts(t *testing.T) {
 		}
 		for _, want := range check.wants {
 			if !strings.Contains(string(data), want) {
-				t.Errorf("%s does not contain release-candidate marker %q", check.name, want)
+				t.Errorf("%s does not contain published-prerelease marker %q", check.name, want)
+			}
+		}
+		for _, forbidden := range []string{
+			"Release candidate, not a published release",
+			"not tagged or published",
+			"source-tree release candidate",
+		} {
+			if strings.Contains(string(data), forbidden) {
+				t.Errorf("%s retained pre-publication marker %q", check.name, forbidden)
 			}
 		}
 	}

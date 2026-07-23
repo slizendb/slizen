@@ -124,7 +124,9 @@ The top-level phase and scenario p50/p95/p99 fields remain mixed end-to-end aggr
 
 Five local Docker repeats used the unchanged cold, request-bound `skew-99-1` workload with seed 42, 1,000 keys, 100,000 generated operations per phase, a 95/5 read/write mix, 128-byte values, and concurrency 32. Every direct phase had `94,961` successful GETs. Slizen recorded `798`–`803` logical upstream GET calls, a `99.154390%`–`99.159655%` proxy-side avoidance estimate, with a `99.121745%`–`99.151231%` cache-hit ratio. Every phase reached the request limit with zero request failures, value mismatches, final-validation failures, and final-validation mismatches. These historical repeats predate origin `INFO commandstats` capture and therefore do not prove physical wire-command volume under retries.
 
-Slizen read p99 was `1.175`–`1.251 ms`, while direct read p99 was `0.986`–`1.042 ms`. These results support only a narrow logical upstream-demand estimate for this exact local workload; they do not establish physical origin reduction, show that Slizen is faster, guarantee 99% reduction for another distribution, or replace tagged immutable-image evidence. v0.2.3 is still a release candidate, and publication must regenerate the bundle from the exact image digest with commandstats-backed evidence.
+Slizen read p99 was `1.175`–`1.251 ms`, while direct read p99 was `0.986`–`1.042 ms`. These historical results support only a narrow logical upstream-demand estimate for this exact local workload; they do not establish physical origin reduction, show that Slizen is faster, or guarantee 99% reduction for another distribution.
+
+The published [v0.2.3-rc.1 evidence bundle](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1) supersedes those local repeats for release identity. Against the exact image digest, physical origin GET reduction was `97.516%` uniform, `97.969%` skew-80/20, `99.201%` skew-99/1, and `99.130%` moving-flash, with zero request failures, value mismatches, validation failures, or validation mismatches. Direct p99 remained lower in all four scenarios, so the result is still origin-load reduction rather than a speed claim.
 
 ### Resource bounds
 

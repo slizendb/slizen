@@ -2,7 +2,7 @@
 
 ## v0.2.3-rc.1 - 2026-07-23 - Release Candidate: Bounded Two-Hit Admission
 
-Release status: candidate source tree. No `v0.2.3` tag, published image, immutable digest, or image-bound release evidence is claimed yet.
+Release status: published staging prerelease. The `v0.2.3-rc.1` tag resolves to commit `7662a1fb5974a6fc369ca486d2a59c85f68cd3b7`; the verified multi-architecture image index is `sha256:e30ad22f4cb23462af9f05322ff97d6796fc521e2e80dc181c42107e4193b92a`.
 
 ### Added
 
@@ -22,7 +22,7 @@ Release status: candidate source tree. No `v0.2.3` tag, published image, immutab
 - Proxied mutations serialize per bounded key stripe, invalidate protected and probationary state before upstream dispatch, and apply a final epoch barrier so overlapping refills cannot restore superseded data.
 - Prometheus now exposes active downstream connections, configured cache byte and entry bounds, and bounded Go runtime/Linux process collectors so operators can distinguish connection growth and cache accounting from heap, allocation rate, RSS, CPU, and goroutine behavior.
 - The downstream idle read deadline now defaults to five minutes instead of three seconds and is documented as a client-pool compatibility setting; `proxy.max_connections` remains the hard connection bound.
-- Until v0.2.3 is published, the default Helm values and raw staging sidecar pin the verified v0.2.2 image digest instead of referencing an image that does not exist. Chart `appVersion`, the default tag, the digest, and rendered application labels identify that same stable runtime.
+- The source Helm values and raw staging sidecar continue to pin verified stable v0.2.2. The release-bound `v0.2.3-rc.1` chart and sidecar asset instead pin the exact prerelease digest; prerelease publication does not move `latest` or `0.2`.
 
 ### Performance evidence
 
