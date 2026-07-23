@@ -4,6 +4,8 @@
 ![Go](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 
+[Polski](README.pl.md) · [English](README.md)
+
 **Developer Preview.** Hot-key autopilot for Redis and Valkey.
 
 Slizen — экспериментальный адаптивный cache-proxy для read-heavy нагрузок. Он ставится перед Redis/Valkey, измеряет температуру ключей, кэширует только разогретые значения `GET`, объединяет одновременные cache miss и инвалидирует локальные копии, когда запись проходит через proxy.
