@@ -55,6 +55,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cacheCmd(args[1:], stdout, stderr)
 	case "benchmark":
 		return benchmarkCmd(args[1:], stdout, stderr)
+	case "compatibility":
+		return compatibilityCmd(args[1:], stdout, stderr)
 	case "demo":
 		return demoCmd(args[1:], stdout, stderr)
 	default:
@@ -343,5 +345,5 @@ func hitRatio(status map[string]any) float64 {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: slizenctl version|healthz|readyz|status|hotkeys|audit|cache|benchmark|demo")
+	fmt.Fprintln(w, "usage: slizenctl version|healthz|readyz|status|hotkeys|audit|cache|benchmark|compatibility|demo")
 }

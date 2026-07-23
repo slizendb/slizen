@@ -4,6 +4,42 @@ Slizen replicates hot objects before they burn your database. Redis or Valkey re
 
 Near-term execution status and acceptance checklists are tracked in [FIRST_ISSUES.md](../FIRST_ISSUES.md).
 
+## Product readiness axis
+
+Infrastructure detail is not the primary readiness measure. Every release is
+also judged by this question:
+
+> Can a team unfamiliar with Slizen reach ready `observe` in no more than
+> 30 minutes, measure it, and later restore the direct endpoint in less than
+> five minutes without Slizen maintainers operating the trial?
+
+The executable [staging runbook](STAGING_ROLLOUT.md), [failure-mode
+contract](FAILURE_MODES.md), and [pass/partial/fail
+gate](STAGING_RELEASE_GATE.md) define that evidence. A green engineering release
+check is necessary but does not by itself prove self-service staging adoption.
+
+The stable public install target remains v0.2.2 at image index
+`sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627`.
+v0.2.3 remains a source-tree release candidate until its immutable artifacts
+are published and verified.
+
+Staging-adoption closure:
+
+- [x] Document measurable, pre-agreed go/no-go thresholds and representative
+  observe, one-prefix, canary, and expansion soak windows.
+- [x] Document standalone Helm and sidecar upgrade/rollback commands, immutable
+  identity capture, connection disruption, and endpoint-first recovery.
+- [x] Publish one operator matrix for crash/OOM, origin outage and recovery,
+  ambiguous writes, TTL, races, memory/request bounds, and `SIGTERM`.
+- [ ] Have an operator who did not develop Slizen reach ready `observe` mode
+  from a clean namespace in no more than 30 minutes without maintainer help.
+- [ ] Record a direct-endpoint rollback rehearsal completed in less than five
+  minutes from routed canary traffic.
+- [ ] Execute the documented failure drills and close every safety-critical
+  pass/partial/fail item.
+- [ ] Complete a design-partner staging soak with agreed application latency,
+  error, origin-load, memory, correctness, and compatibility budgets.
+
 ## v0.1: Single-node adaptive read proxy
 
 Status: released developer preview (`v0.1.0`).
@@ -29,8 +65,12 @@ Included reliability work: bounded graceful proxy handler and connection drain, 
 - [x] Kubernetes sidecar example with readiness, liveness, resources, and a safe `observe` default.
 - [x] Helm chart without an Operator.
 - [x] Documented shadow/observe rollout and rollback procedure.
+- [x] Documented operator-visible failure modes and a self-service staging gate.
 
-Release gate: a team unfamiliar with Slizen can place it in front of a staging Redis or Valkey endpoint in `observe` mode, store no local values, and produce a useful audit report plus reproducible workload evidence.
+Engineering release gate: `observe` stores and serves no local values, and the
+repository provides an audit report plus reproducible workload evidence. The
+separate staging-adoption gate above remains open until an unfamiliar operator
+completes the procedure and rollback rehearsal.
 
 Customer discovery runs in parallel with v0.2. Product validation targets are defined in [VALIDATION_PLAN.md](VALIDATION_PLAN.md); they are business evidence, not software release requirements.
 
@@ -88,7 +128,13 @@ Implementation:
 - [x] Invalidate protected and probationary state before proxied mutation dispatch and retain a final epoch barrier against overlapping stale refills.
 - [x] Attribute misses with fixed bounded `policy_bypass`, `not_admitted`, and `not_present` counters in status and workload evidence.
 - [x] Protect the current HOT FIFO tracker victim with O(1) capacity-drop behavior and expose incomplete telemetry through `capacity_observations_dropped` and `slizen_hotness_capacity_observations_dropped_total`.
-- [x] Record five unchanged cold request-bound 99/1 local Docker repeats with 798–803 Slizen origin GETs versus 94,961 direct, 99.154390–99.159655% reduction, zero failures or mismatches, and no speed claim.
+- [x] Record five unchanged cold request-bound 99/1 local Docker repeats with 798–803 Slizen logical upstream GET calls versus 94,961 direct successful GETs, 99.154390–99.159655% proxy-side avoidance, zero failures or mismatches, and no speed or physical-command claim.
+- [ ] Replace historical proxy-side estimates with release evidence backed by same-`run_id`, monotonic Redis/Valkey `INFO commandstats` deltas from the exact published image.
+- [x] Add an offline version-and-commit-bound compatibility report with a non-zero CI gate for explicitly supplied rejected or unsupported commands.
+- [x] Require explicit acknowledgement for command names whose supported argument shapes are narrower than Redis.
+- [x] Ship an import-ready Grafana dashboard, conservative Prometheus staging alerts, active-connection and cache-capacity gauges, and bounded runtime/process metrics.
+- [x] Default the Helm chart to denied ingress until exact RESP and monitoring peers are declared.
+- [x] Define failure behavior, measured endpoint-first rollback, and a pass/partial/fail self-service staging gate; keep runnable examples and every rendered runtime identity pinned to the last published digest until v0.2.3 exists.
 
 Release closure:
 
@@ -97,6 +143,10 @@ Release closure:
 - [ ] Replace release-candidate wording only after those immutable artifacts exist.
 
 Release gate: the v0.2.2 safety and attribution contract remains green; cache tier totals stay within the configured global budgets; stale-refill and write races remain deterministic; and published performance statements distinguish origin-load reduction from end-to-end speed.
+
+Staging gate: do not promote this candidate merely because its synthetic origin
+reduction improved. It must first acquire a real published digest, then pass the
+same self-service staging and rollback evidence as the stable install target.
 
 ## v0.3: Direct-origin invalidation safety
 

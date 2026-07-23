@@ -14,6 +14,11 @@ The first valuable user workflow is not a distributed mesh. It is this:
 - Redis or Valkey remains the source of truth.
 - Slizen is disposable cache and telemetry state.
 - v0.2 is single-node.
+- The origin path is one standalone Redis/Valkey address; Cluster/Sentinel
+  discovery and failover are outside v0.2.
+- Downstream RESP has no authentication/TLS, upstream has no TLS, and the
+  admin API has no authentication. Staging requires private, enforced network
+  boundaries and an exact client-initialization test.
 - Direct upstream writes may remain stale in Slizen until local TTL expiration.
 - Slizen intentionally supports only a small command set.
 - Hot-key telemetry should use HMAC-based key identifiers by default.
@@ -21,6 +26,11 @@ The first valuable user workflow is not a distributed mesh. It is this:
 ## Release Position
 
 Slizen v0.2 should be described as a developer preview suitable for local demos and careful observe-first staging experiments, not as a production-ready database component.
+
+Readiness is judged by whether an unfamiliar team can install it in `observe`,
+measure overhead and origin load, exercise documented failure behavior, and
+restore the direct endpoint in under five minutes. Repository feature count is
+not a substitute for that external staging evidence.
 
 ## Product Sequence
 

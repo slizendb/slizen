@@ -8,13 +8,14 @@ cd "${ROOT_DIR}"
 : "${SLIZEN_VERSION:?set SLIZEN_VERSION to the tag version without v}"
 : "${SLIZEN_COMMIT:?set SLIZEN_COMMIT to the full release commit}"
 
-case "${SLIZEN_IMAGE}" in
-  *@sha256:*) ;;
-  *)
-    echo "SLIZEN_IMAGE must use an immutable sha256 digest: ${SLIZEN_IMAGE}" >&2
-    exit 1
-    ;;
-esac
+if [[ ! "${SLIZEN_IMAGE}" =~ ^ghcr\.io/slizendb/slizen@sha256:[0-9a-f]{64}$ ]]; then
+  echo "SLIZEN_IMAGE must be the canonical image at an exact sha256 digest" >&2
+  exit 1
+fi
+if [[ ! "${SLIZEN_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "SLIZEN_COMMIT must be a full lowercase 40-hex commit" >&2
+  exit 1
+fi
 
 require() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -55,6 +56,12 @@ export ORIGIN_ADDR="${ORIGIN_ADDR:-127.0.0.1:${SLIZEN_VALKEY_PORT}}"
 export TMP_DIR="${TMP_DIR:-./tmp}"
 trap cleanup EXIT
 
+SLIZEN_ARTIFACT_DIR="${TMP_DIR}" ./scripts/package_release_artifacts.sh
+helm_chart_name="slizen-${SLIZEN_VERSION}.tgz"
+raw_sidecar_name="slizen-observe-sidecar-${SLIZEN_VERSION}.yaml"
+helm_chart_path="${TMP_DIR}/${helm_chart_name}"
+raw_sidecar_path="${TMP_DIR}/${raw_sidecar_name}"
+
 ./scripts/demo_report.sh
 
 workload_result="${TMP_DIR}/slizen-workload-result.json"
@@ -86,6 +93,9 @@ jq -e \
   --arg commit "${SLIZEN_COMMIT}" \
   --argjson request_limit "${release_workload_requests}" \
   --argjson flash_every "${release_workload_flash_every}" '
+  def known_version:
+    type == "string"
+    and (gsub("^\\s+|\\s+$"; "") | length > 0 and ascii_downcase != "unknown");
   .name == "Slizen Release Workload Benchmark"
   and .scenario_selection == "all"
   and .key_prefix == $prefix
@@ -93,10 +103,12 @@ jq -e \
   and .runtime_versions.slizen == $version
   and .runtime_versions.slizen_commit == $commit
   and .runtime_versions.slizenctl == ($version + " (" + $commit + ")")
+  and (.runtime_versions.origin | known_version)
   and .max_requests_per_phase == $request_limit
   and .flash_key_moves_every_operations == $flash_every
   and (.scenarios | type == "array" and length == 4)
   and ((.scenarios | map(.name) | sort) == ["moving-flash", "skew-80-20", "skew-99-1", "uniform"])
+  and ((.scenarios | map(.origin.origin_run_id) | unique | length) == 1)
   and all(.scenarios[];
     .evidence_valid == true
     and .origin.operation_attempts == $request_limit
@@ -139,13 +151,19 @@ jq -e \
 
 image_digest="${SLIZEN_IMAGE##*@}"
 generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+helm_chart_sha256="$(checksum_files "${helm_chart_path}" | awk '{print $1}')"
+raw_sidecar_sha256="$(checksum_files "${raw_sidecar_path}" | awk '{print $1}')"
 jq -n \
-  --arg schema_version "slizen.release-evidence.v1" \
+  --arg schema_version "slizen.release-evidence.v2" \
   --arg generated_at "${generated_at}" \
   --arg version "${SLIZEN_VERSION}" \
   --arg commit "${SLIZEN_COMMIT}" \
   --arg image "${SLIZEN_IMAGE}" \
   --arg image_digest "${image_digest}" \
+  --arg helm_chart "${helm_chart_name}" \
+  --arg helm_chart_sha256 "${helm_chart_sha256}" \
+  --arg raw_sidecar "${raw_sidecar_name}" \
+  --arg raw_sidecar_sha256 "${raw_sidecar_sha256}" \
   '{
     schema_version: $schema_version,
     generated_at: $generated_at,
@@ -153,7 +171,23 @@ jq -n \
     commit: $commit,
     image: $image,
     image_digest: $image_digest,
+    deployment_artifacts: {
+      helm_chart: {
+        file: $helm_chart,
+        sha256: $helm_chart_sha256,
+        chart_version: $version,
+        app_version: $version,
+        image: $image
+      },
+      raw_sidecar: {
+        file: $raw_sidecar,
+        sha256: $raw_sidecar_sha256,
+        image: $image
+      }
+    },
     evidence: [
+      $helm_chart,
+      $raw_sidecar,
       "demo-report.md",
       "slizen-benchmark-result.json",
       "slizen-workload-result.json",
@@ -171,6 +205,8 @@ jq -n \
     demo-report.md \
     hotkeys.json \
     release-evidence-manifest.json \
+    "${helm_chart_name}" \
+    "${raw_sidecar_name}" \
     slizen-benchmark-result.json \
     slizen-workload-result.json \
     status-after.json \

@@ -1,0 +1,33 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "slizen.fullname" . }}
+  labels:
+    {{- include "slizen.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "slizen.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  {{- if or .Values.networkPolicy.redisIngressPeers (and .Values.metrics.enabled .Values.networkPolicy.metricsIngressPeers) }}
+  ingress:
+    {{- with .Values.networkPolicy.redisIngressPeers }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: 6380
+          protocol: TCP
+    {{- end }}
+    {{- if and .Values.metrics.enabled .Values.networkPolicy.metricsIngressPeers }}
+    - from:
+        {{- toYaml .Values.networkPolicy.metricsIngressPeers | nindent 8 }}
+      ports:
+        - port: 9090
+          protocol: TCP
+    {{- end }}
+  {{- else }}
+  ingress: []
+  {{- end }}
+{{- end }}

@@ -7,7 +7,7 @@ Slizen v0.2.0 is a single-node developer preview focused on letting a team evalu
 - Static, bounded per-prefix `deny`, `observe`, and `cache` policies.
 - `/v1/audit` and `slizenctl audit` with the versioned `slizen.audit.v1` JSON schema.
 - Stable recommendation reason codes without Redis values or policy prefixes; HMAC key identifiers remain the default.
-- Uniform, 80/20-like, 99/1-like, and moving-flash workload scenarios with p50/p95/p99, cache hit ratio, origin GET reduction, and runtime versions.
+- Uniform, 80/20-like, 99/1-like, and moving-flash workload scenarios with p50/p95/p99, cache hit ratio, the then-current proxy-side logical upstream-call avoidance estimate, and runtime versions. This release did not capture origin commandstats and does not prove physical wire-command reduction.
 - An observe-first Kubernetes sidecar example and Helm chart without an Operator.
 - A staging guide with compatibility checks, explicit allowed prefixes, before/after evidence, rollback triggers, and a minutes-scale endpoint rollback.
 - Bounded graceful proxy drain and stale-refill protection for writes that pass through Slizen.

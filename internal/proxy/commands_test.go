@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/tidwall/redcon"
+
+	"github.com/slizendb/slizen/internal/compatibility"
 )
 
 func FuzzParseCommand(f *testing.F) {
@@ -50,7 +52,12 @@ func TestCommandParsingIsCaseInsensitive(t *testing.T) {
 }
 
 func TestUnsafeCommandsAreRejected(t *testing.T) {
-	for _, command := range []string{"MULTI", "EXEC", "WATCH", "SUBSCRIBE", "BLPOP", "BZPOPMAX"} {
+	for _, command := range []string{
+		"MULTI", "EXEC", "WATCH", "UNWATCH",
+		"SUBSCRIBE", "PSUBSCRIBE", "SSUBSCRIBE", "MONITOR",
+		"BLPOP", "BRPOP", "BRPOPLPUSH", "BLMOVE",
+		"BZPOPMIN", "BZPOPMAX", "XREAD", "XREADGROUP",
+	} {
 		if !isUnsafeCommand(command) {
 			t.Fatalf("expected %s to be unsafe", command)
 		}
@@ -62,6 +69,73 @@ func TestMutatingCommandsAreExplicitlyRejected(t *testing.T) {
 		if !isRejectedMutation(command) {
 			t.Fatalf("expected %s to be an explicitly rejected mutation", command)
 		}
+	}
+}
+
+func TestCompatibilityCatalogMatchesRuntimeCommandClassification(t *testing.T) {
+	handled := map[string]compatibility.Class{
+		"PING":    compatibility.ClassLocal,
+		"QUIT":    compatibility.ClassLocal,
+		"SELECT":  compatibility.ClassLocal,
+		"GET":     compatibility.ClassRead,
+		"MGET":    compatibility.ClassRead,
+		"SET":     compatibility.ClassWrite,
+		"SETEX":   compatibility.ClassWrite,
+		"PSETEX":  compatibility.ClassWrite,
+		"DEL":     compatibility.ClassWrite,
+		"UNLINK":  compatibility.ClassWrite,
+		"EXPIRE":  compatibility.ClassWrite,
+		"PEXPIRE": compatibility.ClassWrite,
+		"PERSIST": compatibility.ClassWrite,
+		"TTL":     compatibility.ClassPassThrough,
+		"PTTL":    compatibility.ClassPassThrough,
+		"EXISTS":  compatibility.ClassPassThrough,
+	}
+
+	seenHandled := make(map[string]bool, len(handled))
+	for _, entry := range compatibility.Catalog() {
+		switch entry.Class {
+		case compatibility.ClassRejectedMutation:
+			if !isRejectedMutation(entry.Command) || isUnsafeCommand(entry.Command) {
+				t.Errorf("%s is not classified as only a rejected mutation", entry.Command)
+			}
+		case compatibility.ClassRejectedStateful:
+			if isRejectedMutation(entry.Command) || !isUnsafeCommand(entry.Command) || isBlockingCommand(entry.Command) {
+				t.Errorf("%s is not classified as only a rejected stateful command", entry.Command)
+			}
+		case compatibility.ClassRejectedBlocking:
+			if isRejectedMutation(entry.Command) || !isUnsafeCommand(entry.Command) || !isBlockingCommand(entry.Command) {
+				t.Errorf("%s is not classified as a rejected blocking command", entry.Command)
+			}
+		default:
+			wantClass, ok := handled[entry.Command]
+			if !ok {
+				t.Errorf("%s is cataloged as %s but has no runtime handler", entry.Command, entry.Class)
+				continue
+			}
+			seenHandled[entry.Command] = true
+			if entry.Class != wantClass {
+				t.Errorf("%s class = %s, want %s", entry.Command, entry.Class, wantClass)
+			}
+			if isRejectedMutation(entry.Command) || isUnsafeCommand(entry.Command) || isBlockingCommand(entry.Command) {
+				t.Errorf("%s is handled but also classified as rejected", entry.Command)
+			}
+		}
+	}
+	for command := range handled {
+		if !seenHandled[command] {
+			t.Errorf("runtime handler %s is missing from compatibility catalog", command)
+		}
+	}
+}
+
+func TestUnknownCommandsAreNotClassifiedAsKnownRejections(t *testing.T) {
+	const command = "EVAL"
+	if isUnsafeCommand(command) || isRejectedMutation(command) || isBlockingCommand(command) {
+		t.Fatalf("%s was classified as a known rejection instead of unsupported", command)
+	}
+	if entry := compatibility.Lookup(command); entry.Status != compatibility.StatusUnsupported {
+		t.Fatalf("%s status = %s, want unsupported", command, entry.Status)
 	}
 }
 

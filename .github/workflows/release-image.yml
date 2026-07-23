@@ -65,6 +65,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v3.18.4
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Sign in to GHCR
@@ -78,11 +81,10 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ghcr.io/slizendb/slizen
-          flavor: latest=auto
+          flavor: latest=false
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
           labels: |
             org.opencontainers.image.source=https://github.com/slizendb/slizen
             org.opencontainers.image.documentation=https://github.com/slizendb/slizen#readme
@@ -107,12 +109,20 @@ jobs:
           subject-name: ghcr.io/slizendb/slizen
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
-      - name: Generate immutable-image release evidence
+      - name: Generate immutable deployment artifacts and image evidence
         env:
           SLIZEN_IMAGE: ghcr.io/slizendb/slizen@${{ steps.push.outputs.digest }}
           SLIZEN_VERSION: ${{ needs.validate.outputs.version }}
           SLIZEN_COMMIT: ${{ github.sha }}
         run: ./scripts/release_evidence.sh
+      - name: Attest release Helm chart
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: tmp/slizen-${{ needs.validate.outputs.version }}.tgz
+      - name: Attest release raw sidecar manifest
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: tmp/slizen-observe-sidecar-${{ needs.validate.outputs.version }}.yaml
       - name: Upload immutable-image evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -124,8 +134,28 @@ jobs:
             tmp/demo-report.md
             tmp/hotkeys.json
             tmp/release-evidence-manifest.json
+            tmp/slizen-${{ needs.validate.outputs.version }}.tgz
+            tmp/slizen-observe-sidecar-${{ needs.validate.outputs.version }}.yaml
             tmp/slizen-benchmark-result.json
             tmp/slizen-workload-result.json
             tmp/status-after.json
             tmp/status-before.json
           if-no-files-found: error
+      - name: Promote verified stable aliases
+        if: success()
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "prerelease ${RELEASE_VERSION}: stable aliases are not promoted"
+            exit 0
+          fi
+          major="${RELEASE_VERSION%%.*}"
+          remainder="${RELEASE_VERSION#*.}"
+          minor="${remainder%%.*}"
+          docker buildx imagetools create \
+            --tag "ghcr.io/slizendb/slizen:${major}.${minor}" \
+            --tag "ghcr.io/slizendb/slizen:latest" \
+            "ghcr.io/slizendb/slizen@${RELEASE_DIGEST}"

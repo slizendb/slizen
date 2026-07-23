@@ -42,6 +42,7 @@ type Server struct {
 // redcon drains its parsed command slice before observing Conn.Close.
 type connectionState struct {
 	dispatchStopped bool
+	metricCounted   bool
 }
 
 func NewServer(cfg config.ProxyConfig, svc *service.Service, logger *slog.Logger) *Server {
@@ -147,12 +148,17 @@ func (s *Server) acceptConnection(conn redcon.Conn) bool {
 		}
 	}
 	if accepted {
-		conn.SetContext(&connectionState{})
+		conn.SetContext(&connectionState{metricCounted: true})
+		s.svc.Metrics().ConnectionOpened()
 	}
 	return accepted
 }
 
 func (s *Server) connectionClosed(conn redcon.Conn, err error) {
+	if state, ok := conn.Context().(*connectionState); ok && state.metricCounted {
+		state.metricCounted = false
+		s.svc.Metrics().ConnectionClosed()
+	}
 	s.drain.connectionClosed(conn.NetConn())
 	if err != nil {
 		s.logger.Debug("proxy connection closed", "remote", conn.RemoteAddr(), "error", err)
@@ -346,12 +352,13 @@ func (s *Server) handle(conn redcon.Conn, cmd redcon.Command) {
 	command = parsed.Name
 	args := parsed.Args
 
-	if isUnsafeCommand(command) {
+	commandClass := classifyNormalizedCommand(command)
+	if isUnsafeClass(commandClass) {
 		result = "error"
 		conn.WriteError(rejectedUnsafe(command))
 		return
 	}
-	if isRejectedMutation(command) {
+	if isRejectedMutationClass(commandClass) {
 		result = "error"
 		conn.WriteError(rejectedMutation(command))
 		return

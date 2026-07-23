@@ -8,11 +8,11 @@
 
 Slizen is a self-hosted adaptive cache layer for read-heavy Redis and Valkey workloads. It detects read-hot keys, promotes them into a bounded local cache, coalesces cache misses, and protects your upstream from sudden traffic spikes.
 
-Slizen v0.2 is single-node, not a source of truth, and has limited Redis compatibility. Direct upstream writes may remain stale until local TTL expiration. The admin API binds locally by default and has no built-in authentication in v0.2.
+Slizen v0.2 is single-node, not a source of truth, and has limited Redis compatibility. Its upstream is one standalone Redis/Valkey address; Cluster redirections and Sentinel discovery/failover are not supported. Direct upstream writes may remain stale until local TTL expiration. It does not implement downstream RESP authentication/TLS or upstream Redis/Valkey TLS. Keep every plaintext path private; bind the RESP listener to Pod/host loopback or restrict it to explicitly approved clients with a NetworkPolicy. The admin API also has no built-in authentication and binds locally by default.
 
-**Evidence, not a speed claim.** In the reproducible, image-bound v0.2.2 synthetic 1,000-key 99/1-skew run, Slizen measured **89.778% fewer origin GETs** (`94,961` direct versus `9,707` through Slizen), a `73.628%` cache-hit ratio, and zero request failures, value mismatches, or final-validation failures or mismatches. Attributed read p99 was `2.137 ms` through Slizen versus `1.460 ms` direct, so this does not claim that Slizen was faster. See the [raw release JSON](https://github.com/slizendb/slizen/releases/download/v0.2.2/slizen-workload-result.json) and [methodology](docs/BENCHMARKING.md); results are specific to that runner, configuration, and workload.
+**Evidence, not a speed claim.** In the reproducible, image-bound v0.2.2 synthetic 1,000-key 99/1-skew run, Slizen measured **89.778% fewer logical upstream GET calls** (`94,961` direct successful GETs versus `9,707` Slizen calls), a `73.628%` cache-hit ratio, and zero request failures, value mismatches, or final-validation failures or mismatches. That historical artifact did not capture Redis/Valkey `commandstats`, so the reduction is a proxy-side estimate rather than proof of physical wire-command volume. Attributed read p99 was `2.137 ms` through Slizen versus `1.460 ms` direct, so this does not claim that Slizen was faster. See the [raw release JSON](https://github.com/slizendb/slizen/releases/download/v0.2.2/slizen-workload-result.json) and [methodology](docs/BENCHMARKING.md); results are specific to that runner, configuration, and workload.
 
-**v0.2.3 source-tree release candidate.** Bounded two-hit admission and exact-SET refresh for already admitted keys reduced origin GETs from `94,961` direct to `798`–`803` across five unchanged local cold 99/1 repeats (`99.154390%`–`99.159655%` reduction) with zero failures or mismatches. Slizen read p99 was `1.175`–`1.251 ms` versus `0.986`–`1.042 ms` direct, so this remains an origin-load result, not a speed claim or a universal 99% guarantee. This is local candidate evidence, not a tag, published image, digest, or image-bound release result; the stable install and links below remain v0.2.2 until publication. See the [candidate notes](docs/RELEASE_NOTES_v0.2.3.md).
+**v0.2.3 source-tree release candidate.** Bounded two-hit admission and exact-SET refresh for already admitted keys reduced logical upstream GET calls from `94,961` direct successful GETs to `798`–`803` across five unchanged local cold 99/1 repeats (`99.154390%`–`99.159655%` proxy-side avoidance) with zero failures or mismatches. Those historical local repeats also predate physical `commandstats` capture. Slizen read p99 was `1.175`–`1.251 ms` versus `0.986`–`1.042 ms` direct, so this is neither a speed claim nor a universal 99% guarantee. This is local candidate evidence, not a tag, published image, digest, or image-bound release result; the stable install and links below remain v0.2.2 until publication. See the [candidate notes](docs/RELEASE_NOTES_v0.2.3.md).
 
 We are looking for three design partners with real Redis or Valkey hot-key incidents. If you can test a single-node developer preview in an isolated environment, [describe the workload without sensitive data](https://github.com/slizendb/slizen/issues/new?template=design-partner.yml).
 
@@ -28,10 +28,12 @@ flowchart LR
 
 ## Install
 
-The public multi-architecture image is published on GHCR. `0.2` tracks the latest v0.2 patch; use the immutable digest recorded by release evidence for a reproducible deployment.
+The public multi-architecture image is published on GHCR. `0.2` is a mutable
+discovery alias; the runnable path below pins the verified v0.2.2 digest.
 
 ```sh
-docker pull ghcr.io/slizendb/slizen:0.2
+export SLIZEN_IMAGE=ghcr.io/slizendb/slizen@sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627
+docker pull "$SLIZEN_IMAGE"
 ```
 
 Run observe-only against Redis or Valkey on the host:
@@ -45,10 +47,10 @@ docker run --rm \
   -e SLIZEN_PROXY_LISTEN=0.0.0.0:6380 \
   -e SLIZEN_ADMIN_LISTEN=0.0.0.0:9090 \
   -e SLIZEN_UPSTREAM_ADDRESS=host.docker.internal:6379 \
-  ghcr.io/slizendb/slizen:0.2
+  "$SLIZEN_IMAGE"
 ```
 
-See the [latest release](https://github.com/slizendb/slizen/releases/latest), [v0.2.2 release notes](docs/RELEASE_NOTES_v0.2.2.md), and [configuration safety guide](docs/CONFIGURATION.md).
+For Kubernetes, start with the [30-minute observe install](docs/STAGING_QUICKSTART.md), then use the full [staging runbook](docs/STAGING_ROLLOUT.md). See the [latest release](https://github.com/slizendb/slizen/releases/latest), [v0.2.2 release notes](docs/RELEASE_NOTES_v0.2.2.md), and [configuration safety guide](docs/CONFIGURATION.md).
 
 ## Quick Start From Source
 
@@ -132,7 +134,13 @@ The Compose stack exposes Valkey directly on `127.0.0.1:6379`, Slizen RESP on `1
 
 ## Kubernetes staging
 
-v0.2 includes an observe-first [sidecar example](deploy/kubernetes/observe-sidecar.yaml) and a [standalone Helm chart](charts/slizen/README.md). Neither injects containers or acts as an Operator. Read the [staging rollout and rollback guide](docs/STAGING_ROLLOUT.md) before changing a client endpoint.
+v0.2 includes an observe-first [sidecar example](deploy/kubernetes/observe-sidecar.yaml) and a [standalone Helm chart](charts/slizen/README.md). Neither injects containers or acts as an Operator. The Helm chart renders a default-deny ingress NetworkPolicy; declare the exact application and monitoring peers before routing traffic. Before changing a client endpoint, read the executable [staging rollout](docs/STAGING_ROLLOUT.md), [failure-mode contract](docs/FAILURE_MODES.md), [observability pack](docs/OBSERVABILITY.md), and [self-service staging gate](docs/STAGING_RELEASE_GATE.md).
+
+Each sidecar replica owns an independent disposable cache. v0.2 does not
+broadcast invalidations between application Pods, so a first cache-mode
+sidecar trial must use one replica, a read-only prefix, or an explicitly
+accepted local-TTL staleness budget. Multi-replica `observe` mode is safe
+because it never stores or serves local values.
 
 ```sh
 make validate-k8s
@@ -146,14 +154,14 @@ See [docs/REDIS_COMPATIBILITY.md](docs/REDIS_COMPATIBILITY.md) for the v0.2 comp
 | --- | --- |
 | `GET` | Cache-aware read in `cache` mode; observation and upstream forwarding only in `observe` mode. |
 | `MGET` | Ordered multi-key read with local hits in `cache` mode; upstream forwarding only in `observe` mode. |
-| `SET` | Forwarded upstream; an exact option-free SET refreshes an already admitted cache-policy key, otherwise local state is invalidated. |
-| `SETEX` | Write-through to upstream, then local invalidation. |
-| `PSETEX` | Write-through to upstream, then local invalidation. |
-| `DEL` | Write-through to upstream, then local invalidation. |
-| `UNLINK` | Write-through to upstream, then local invalidation. |
-| `EXPIRE` | Write-through to upstream, then local invalidation. |
-| `PEXPIRE` | Write-through to upstream, then local invalidation. |
-| `PERSIST` | Write-through to upstream, then local invalidation. |
+| `SET` | Forwarded and conservatively invalidates local state. The v0.2.3 candidate invalidates before dispatch and can refresh an already admitted key after a successful exact option-free `SET`; stable v0.2.2 invalidates after the upstream call and does not refresh. |
+| `SETEX` | Forwarded and invalidates local state; the v0.2.3 candidate moves invalidation before upstream dispatch. |
+| `PSETEX` | Forwarded and invalidates local state; the v0.2.3 candidate moves invalidation before upstream dispatch. |
+| `DEL` | Forwarded and invalidates local state; the v0.2.3 candidate moves invalidation before upstream dispatch. |
+| `UNLINK` | Forwarded and invalidates local state; the v0.2.3 candidate moves invalidation before upstream dispatch. |
+| `EXPIRE` | Forwarded and invalidates local state; the v0.2.3 candidate moves invalidation before upstream dispatch. |
+| `PEXPIRE` | Forwarded and invalidates local state; the v0.2.3 candidate moves invalidation before upstream dispatch. |
+| `PERSIST` | Forwarded and invalidates local state; the v0.2.3 candidate moves invalidation before upstream dispatch. |
 | `TTL` | Passed through to upstream. |
 | `PTTL` | Passed through to upstream. |
 | `EXISTS` | Passed through to upstream in v0.2. |
@@ -165,13 +173,40 @@ See [docs/REDIS_COMPATIBILITY.md](docs/REDIS_COMPATIBILITY.md) for the v0.2 comp
 
 Slizen does not claim complete Redis compatibility.
 
+The v0.2.3 source-tree candidate can check an explicit command inventory
+offline before deployment. The full catalog is informational; an explicit
+selection exits non-zero when it contains a rejected or unsupported command.
+Commands whose accepted argument shapes are narrower than Redis require an
+explicit limitations acknowledgement:
+
+```sh
+go run ./cmd/slizenctl compatibility report --output json --accept-limitations GET MGET SET TTL
+go run ./cmd/slizenctl compatibility report --output json GET EVAL
+```
+
+This reports what the binary supports; it does not discover an application's
+workload. An ad hoc `go run` report has `binary_commit=unknown`; use a stamped
+published `slizenctl` report for retained staging evidence. See [the
+compatibility contract](docs/REDIS_COMPATIBILITY.md).
+
 ## Consistency Model
 
-Redis or Valkey remains authoritative. Slizen is safest when supported writes pass through Slizen: protected and probationary entries are invalidated before dispatch, and bounded cache epochs prevent overlapping read misses from restoring a pre-write value afterward. A successful exact option-free `SET` can refresh only an already admitted cache-policy key after upstream acceptance. Other mutations and ambiguous errors remain conservatively invalidating. Direct writes to the upstream may leave either tier stale until local TTL expiration.
+Redis or Valkey remains authoritative. Slizen is safest when supported writes pass through Slizen. Stable v0.2.2 invalidates local state after the upstream call. The v0.2.3 candidate strengthens this by invalidating protected and probationary entries before dispatch; bounded cache epochs prevent overlapping read misses from restoring a pre-write value afterward, and a successful exact option-free `SET` can refresh only an already admitted cache-policy key after upstream acceptance. Other mutations and ambiguous errors remain conservatively invalidating. Direct writes to the upstream may leave local cache state stale until local TTL expiration.
 
 The cache is disposable. Restarting Slizen may lose cached values and hotness state. During upstream outages, stale reads are disabled by default; enabling them requires `cache.allow_stale_on_upstream_error = true`. In `observe` mode, Slizen does not read from or write to the local cache at all.
 
 ## Security Notes
+
+The downstream RESP listener does not support client `AUTH` or TLS in v0.2,
+and the upstream client does not support Redis/Valkey TLS. Use only a private
+plaintext path or a separately reviewed external termination/tunnel; a
+TLS-required origin is otherwise incompatible. Bind downstream RESP to loopback
+for a sidecar/local deployment, or allow only named application peers through
+a default-deny NetworkPolicy. Do not expose it as a general cluster or public
+Redis endpoint. Test the exact application client initialization: a client
+profile that automatically sends `AUTH`, requires TLS, or cannot tolerate
+Slizen rejecting unsupported `HELLO`/`CLIENT` setup is not endpoint-only
+compatible. Configure origin credentials separately on Slizen.
 
 The admin API is unauthenticated in v0.2 and binds to `127.0.0.1:9090` by default. Do not expose it publicly without an external authentication and network policy layer.
 
@@ -191,7 +226,25 @@ curl http://127.0.0.1:9090/metrics
 
 `/v1/audit` returns a bounded, machine-readable hot-key report with stable recommendation reason codes. It includes effective policy modes but never policy prefixes or Redis values; key identifiers follow `privacy.key_visibility` and are HMAC-based by default. `telemetry_complete=false` means the requested limit truncated the current set, tracking evicted a key, an unseen observation was dropped to protect the current HOT FIFO victim at capacity, or at least one key over the 1,024-byte tracking limit was skipped. Capacity drops are reported as `capacity_observations_dropped`; the bounded O(1) victim rule does not promise unlimited scan resistance. The same report is available through `go run ./cmd/slizenctl audit --admin http://127.0.0.1:9090`.
 
-`/v1/status` includes the active mode. Prometheus metrics include request counts and latency, cache hits and fixed-reason misses (`policy_bypass`, `not_admitted`, and `not_present`), retained cache bytes and entries across both tiers, evictions, upstream requests and errors, hot-key count, promotions, demotions, invalidations, coalesced requests, `slizen_hotness_capacity_observations_dropped_total`, and skipped oversized hotness observations. Expired entries may remain in bounded cache storage until access or eviction, including while eligible for an explicitly configured stale-grace fallback. Redis keys are never used as labels.
+`/v1/status` includes the active mode. The current v0.2.3 source tree adds
+fixed-reason cache misses (`policy_bypass`, `not_admitted`, and `not_present`),
+active downstream connections, configured cache-bound gauges, and
+`slizen_hotness_capacity_observations_dropped_total` to the existing bounded
+request, latency, cache, upstream, hotness, promotion, demotion, invalidation,
+coalescing, and oversized-observation metrics. The published v0.2.2 image does
+not emit those v0.2.3-only series; the supplied observability guide marks the
+affected panels and fallback checks. Expired entries may remain in bounded
+cache storage until access or eviction, including while eligible for an
+explicitly configured stale-grace fallback. Redis keys are never used as
+labels.
+
+Import the supplied [Grafana dashboard and Prometheus staging
+rules](docs/OBSERVABILITY.md) instead of inventing queries during an incident.
+They keep cache-hit ratio, proxy-side logical upstream-call avoidance, latency,
+errors, capacity, and telemetry completeness separate. Physical origin command
+volume and retry amplification must come from Redis/Valkey `commandstats` or an
+origin-side exporter; platform-level readiness and container alerts are also
+still required.
 
 ## Cache Administration
 
@@ -211,7 +264,13 @@ make benchmark-workload
 make demo-report
 ```
 
-The benchmark compares direct origin GETs with Slizen cold and hot reads, then reports cache hit ratio and origin GET reduction from real `/v1/status` counters. The workload suite verifies every successful GET against a deterministic key-specific payload; any value mismatch invalidates the evidence. See [docs/BENCHMARKING.md](docs/BENCHMARKING.md).
+The benchmark compares direct-origin and Slizen phases, then reports cache-hit
+ratio from `/v1/status` and physical origin GET reduction from same-`run_id`
+Redis/Valkey `INFO commandstats` deltas. The logical Slizen upstream delta is
+retained separately to detect retries or unrelated origin traffic. Every
+successful GET is checked against a deterministic key-specific payload; any
+value mismatch or evidence-identity/isolation failure invalidates the result.
+See [docs/BENCHMARKING.md](docs/BENCHMARKING.md).
 
 Go microbenchmarks:
 
@@ -249,6 +308,9 @@ Release prep:
 - [docs/DEMO.md](docs/DEMO.md)
 - [docs/BENCHMARKING.md](docs/BENCHMARKING.md)
 - [docs/STAGING_ROLLOUT.md](docs/STAGING_ROLLOUT.md)
+- [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)
+- [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)
+- [docs/STAGING_RELEASE_GATE.md](docs/STAGING_RELEASE_GATE.md)
 - [docs/REDIS_COMPATIBILITY.md](docs/REDIS_COMPATIBILITY.md)
 - [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
 - [docs/PUBLIC_RELEASE_CHECKLIST.md](docs/PUBLIC_RELEASE_CHECKLIST.md)

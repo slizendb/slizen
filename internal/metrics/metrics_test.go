@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -99,6 +100,63 @@ func TestCacheMissUsesUnclassifiedReason(t *testing.T) {
 	snapshot := recorder.Snapshot()
 	if snapshot.CacheMisses != 1 || snapshot.CacheMissesUnclassified != 1 {
 		t.Fatalf("snapshot = %+v, want one unclassified cache miss", snapshot)
+	}
+}
+
+func TestCacheLimitsExposeConfiguredBounds(t *testing.T) {
+	recorder := New()
+	recorder.SetCacheLimits(1<<20, 1000)
+
+	response := httptest.NewRecorder()
+	recorder.Handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	body := response.Body.String()
+	for _, want := range []string{
+		"slizen_cache_max_bytes 1.048576e+06",
+		"slizen_cache_max_entries 1000",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestRuntimeAndProcessMetricsAreExposed(t *testing.T) {
+	recorder := New()
+
+	response := httptest.NewRecorder()
+	recorder.Handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	body := response.Body.String()
+	for _, want := range []string{
+		"go_goroutines ",
+		"go_memstats_alloc_bytes ",
+		"go_memstats_alloc_bytes_total ",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics missing %q", want)
+		}
+	}
+	if runtime.GOOS == "linux" {
+		for _, want := range []string{
+			"process_cpu_seconds_total ",
+			"process_resident_memory_bytes ",
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("Linux metrics missing %q", want)
+			}
+		}
+	}
+}
+
+func TestActiveConnectionsGaugeTracksOpenAndClose(t *testing.T) {
+	recorder := New()
+	recorder.ConnectionOpened()
+	recorder.ConnectionOpened()
+	recorder.ConnectionClosed()
+
+	response := httptest.NewRecorder()
+	recorder.Handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	if !strings.Contains(response.Body.String(), "slizen_active_connections 1") {
+		t.Fatalf("active connection gauge is not one:\n%s", response.Body.String())
 	}
 }
 

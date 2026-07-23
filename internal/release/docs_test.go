@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/slizendb/slizen/internal/buildinfo"
+	"github.com/slizendb/slizen/internal/compatibility"
 )
 
 func TestRedisCompatibilityDocMatchesKnownCommands(t *testing.T) {
@@ -15,39 +16,9 @@ func TestRedisCompatibilityDocMatchesKnownCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := map[string]string{
-		"PING":       "supported",
-		"GET":        "supported",
-		"MGET":       "supported",
-		"SET":        "supported",
-		"SETEX":      "supported",
-		"PSETEX":     "supported",
-		"DEL":        "supported",
-		"UNLINK":     "supported",
-		"EXPIRE":     "supported",
-		"PEXPIRE":    "supported",
-		"PERSIST":    "supported",
-		"MSET":       "rejected",
-		"RENAME":     "rejected",
-		"HSET":       "rejected",
-		"HDEL":       "rejected",
-		"LPUSH":      "rejected",
-		"RPUSH":      "rejected",
-		"LPOP":       "rejected",
-		"RPOP":       "rejected",
-		"SADD":       "rejected",
-		"SREM":       "rejected",
-		"TTL":        "pass-through",
-		"PTTL":       "pass-through",
-		"EXISTS":     "pass-through",
-		"MULTI":      "rejected",
-		"EXEC":       "rejected",
-		"WATCH":      "rejected",
-		"SUBSCRIBE":  "rejected",
-		"PSUBSCRIBE": "rejected",
-		"MONITOR":    "rejected",
-		"SELECT":     "supported",
-		"BLPOP":      "rejected",
+	allowed := make(map[string]string)
+	for _, entry := range compatibility.Catalog() {
+		allowed[entry.Command] = string(entry.Status)
 	}
 	found := map[string]bool{}
 	for _, line := range strings.Split(string(data), "\n") {
@@ -64,6 +35,9 @@ func TestRedisCompatibilityDocMatchesKnownCommands(t *testing.T) {
 		if !ok {
 			t.Fatalf("compatibility doc mentions unknown command %q", command)
 		}
+		if found[command] {
+			t.Fatalf("compatibility doc mentions %s more than once", command)
+		}
 		found[command] = true
 		if status != expected {
 			t.Fatalf("%s status = %q, want %q", command, status, expected)
@@ -72,6 +46,16 @@ func TestRedisCompatibilityDocMatchesKnownCommands(t *testing.T) {
 	for command := range allowed {
 		if !found[command] {
 			t.Fatalf("compatibility doc missing %s", command)
+		}
+	}
+	for _, want := range []string{
+		"any other command is classified as `unsupported`",
+		"`slizenctl compatibility report`",
+		"does **not** capture, inspect, or scan an application's workload",
+		"NX`, `XX`, `GT`, and `LT` options are unsupported",
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("compatibility doc missing contract text %q", want)
 		}
 	}
 }
@@ -119,7 +103,7 @@ func TestCanonicalReleaseIdentity(t *testing.T) {
 	assertContains("Dockerfile", `org.opencontainers.image.source="https://github.com/slizendb/slizen"`)
 	assertContains(filepath.Join(".github", "workflows", "release-image.yml"), "ghcr.io/slizendb/slizen")
 	assertContains(filepath.Join("charts", "slizen", "values.yaml"), "repository: ghcr.io/slizendb/slizen")
-	assertContains(filepath.Join("deploy", "kubernetes", "observe-sidecar.yaml"), "image: ghcr.io/slizendb/slizen:0.2.3")
+	assertContains(filepath.Join("deploy", "kubernetes", "observe-sidecar.yaml"), "image: ghcr.io/slizendb/slizen@sha256:")
 }
 
 func TestReleaseCandidateDocsDoNotClaimPublishedArtifacts(t *testing.T) {
@@ -128,7 +112,7 @@ func TestReleaseCandidateDocsDoNotClaimPublishedArtifacts(t *testing.T) {
 		name  string
 		wants []string
 	}{
-		{filepath.Join("docs", "RELEASE_NOTES_v0.2.3.md"), []string{"Release candidate, not a published release", "94,961", "798–803", "99.154390%–99.159655%", "not a speed claim"}},
+		{filepath.Join("docs", "RELEASE_NOTES_v0.2.3.md"), []string{"Release candidate, not a published release", "94,961", "798–803", "99.154390%–99.159655%", "not proof of physical wire-command reduction"}},
 		{filepath.Join("docs", "ROADMAP.md"), []string{"Status: release candidate in the source tree; not tagged or published", "Publish and verify the `v0.2.3` tag"}},
 		{"README.md", []string{"releases/download/v0.2.2/slizen-workload-result.json", "v0.2.3 source-tree release candidate"}},
 	}
@@ -159,11 +143,10 @@ func TestReleaseVersionSurfacesMatch(t *testing.T) {
 		name  string
 		wants []string
 	}{
-		{filepath.Join("charts", "slizen", "Chart.yaml"), []string{"version: " + version, `appVersion: "` + version + `"`}},
-		{filepath.Join("deploy", "kubernetes", "observe-sidecar.yaml"), []string{"image: ghcr.io/slizendb/slizen:" + version}},
+		{filepath.Join("charts", "slizen", "Chart.yaml"), []string{"version: " + version}},
 		{filepath.Join("scripts", "release_check.sh"), []string{`SLIZEN_VERSION:-` + version}},
 		{"CHANGELOG.md", []string{"## v" + version + " - "}},
-		{filepath.Join("docs", "RELEASE_CHECKLIST.md"), []string{"RELEASE_NOTES_v" + version + ".md", "git tag -a v" + version, "ghcr.io/slizendb/slizen:" + version}},
+		{filepath.Join("docs", "RELEASE_CHECKLIST.md"), []string{"RELEASE_NOTES_v" + version + ".md", "git tag -a v" + version, "ghcr.io/slizendb/slizen@$RELEASE_DIGEST"}},
 		{filepath.Join("docs", "RELEASE_NOTES_v"+version+".md"), []string{"# Slizen v" + version + " —"}},
 		{filepath.Join(".github", "ISSUE_TEMPLATE", "bug.yml"), []string{version + " (full commit SHA)"}},
 	}
@@ -176,6 +159,41 @@ func TestReleaseVersionSurfacesMatch(t *testing.T) {
 		for _, want := range check.wants {
 			if !strings.Contains(string(data), want) {
 				t.Errorf("%s does not contain release version marker %q", check.name, want)
+			}
+		}
+	}
+}
+
+func TestStagingArtifactsPinPublishedImage(t *testing.T) {
+	root := repoRoot(t)
+	const stableVersion = "0.2.2"
+	const stableDigest = "sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627"
+	const image = "ghcr.io/slizendb/slizen@sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627"
+	checks := []struct {
+		name  string
+		wants []string
+	}{
+		{
+			filepath.Join("charts", "slizen", "Chart.yaml"),
+			[]string{`appVersion: "` + stableVersion + `"`},
+		},
+		{
+			filepath.Join("charts", "slizen", "values.yaml"),
+			[]string{`tag: "` + stableVersion + `"`, `digest: "` + stableDigest + `"`},
+		},
+		{
+			filepath.Join("deploy", "kubernetes", "observe-sidecar.yaml"),
+			[]string{"image: " + image},
+		},
+	}
+	for _, check := range checks {
+		data, err := os.ReadFile(filepath.Join(root, check.name))
+		if err != nil {
+			t.Fatalf("read %s: %v", check.name, err)
+		}
+		for _, want := range check.wants {
+			if !strings.Contains(string(data), want) {
+				t.Errorf("%s does not contain stable artifact identity %q", check.name, want)
 			}
 		}
 	}

@@ -15,7 +15,10 @@ Slizen will not act as a durable database, transactional store, consensus system
 ## Consequences
 
 - Restarting Slizen may drop cached values and hotness state.
-- Writes that pass through Slizen invalidate local cache entries after upstream acceptance.
+- Supported writes that pass through Slizen conservatively invalidate local
+  state before upstream dispatch and remain invalidated on errors or ambiguous
+  outcomes. A successful exact option-free `SET` may refresh only an already
+  admitted cache-policy key after upstream acceptance.
 - Ambiguous upstream write errors also invalidate affected disposable cache entries conservatively.
 - Fixed-size cache epochs prevent overlapping read misses from restoring values superseded by proxied writes.
 - Direct upstream writes may remain stale in Slizen until local TTL expiration.

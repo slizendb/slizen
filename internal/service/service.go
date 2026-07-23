@@ -131,6 +131,7 @@ func New(opts Options) *Service {
 	if recorder == nil {
 		recorder = metrics.New()
 	}
+	recorder.SetCacheLimits(opts.Config.Cache.MaxBytes, opts.Config.Cache.MaxEntries)
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()

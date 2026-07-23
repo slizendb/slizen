@@ -44,7 +44,11 @@ cat ./tmp/demo-report.md
 make demo-down
 ```
 
-The benchmark compares direct origin GETs with Slizen cold and hot reads. It reports cache hit ratio and upstream GET reduction from real `/v1/status` counters. It is local demo evidence, not a scientific production benchmark.
+The benchmark compares successful direct reads with Slizen cold and hot reads.
+It reports cache hit ratio and a logical upstream-call avoidance estimate from
+real `/v1/status` counters. It does not capture origin commandstats or physical
+retry attempts, so it is local demo evidence rather than proof of wire-command
+reduction or a scientific production benchmark.
 
 ## Safety model
 

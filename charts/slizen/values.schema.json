@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["replicaCount", "image", "mode", "upstream", "proxy", "admin", "cache", "hotness", "privacy", "logging", "service", "resources", "probes", "terminationGracePeriodSeconds", "metrics"],
+  "required": ["replicaCount", "image", "mode", "upstream", "proxy", "admin", "cache", "hotness", "privacy", "logging", "service", "networkPolicy", "resources", "probes", "terminationGracePeriodSeconds", "metrics"],
   "properties": {
     "replicaCount": {"type": "integer", "const": 1},
     "image": {"$ref": "#/definitions/image"},
@@ -52,7 +52,7 @@
       "required": ["maxBytes", "maxEntries", "maxLocalTTL", "allowStaleOnUpstreamError", "staleGrace", "negativeTTL", "policies"],
       "properties": {
         "maxBytes": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
-        "maxEntries": {"type": "integer", "minimum": 0},
+        "maxEntries": {"type": "integer", "minimum": 0, "maximum": 2147483647},
         "maxLocalTTL": {"$ref": "#/definitions/duration"},
         "allowStaleOnUpstreamError": {"type": "boolean"},
         "staleGrace": {"$ref": "#/definitions/durationAllowZero"},
@@ -73,7 +73,7 @@
         "ewmaAlpha": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
         "promotionThreshold": {"type": "number", "exclusiveMinimum": 0},
         "demotionThreshold": {"type": "number", "exclusiveMinimum": 0},
-        "minimumHotWindows": {"type": "integer", "minimum": 1},
+        "minimumHotWindows": {"type": "integer", "minimum": 1, "maximum": 2147483647},
         "cooldown": {"$ref": "#/definitions/duration"},
         "maxTrackedKeys": {"type": "integer", "minimum": 1, "maximum": 100000}
       }
@@ -97,6 +97,24 @@
       }
     },
     "service": {"$ref": "#/definitions/service"},
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "redisIngressPeers", "metricsIngressPeers"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "redisIngressPeers": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"$ref": "#/definitions/networkPolicyPeer"}
+        },
+        "metricsIngressPeers": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"$ref": "#/definitions/networkPolicyPeer"}
+        }
+      }
+    },
     "podAnnotations": {"type": "object", "additionalProperties": {"type": "string"}},
     "podLabels": {"type": "object", "additionalProperties": {"type": "string"}},
     "podSecurityContext": {"type": "object"},
@@ -112,7 +130,7 @@
         "liveness": {"$ref": "#/definitions/probe"}
       }
     },
-    "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1},
+    "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1, "maximum": 2147483647},
     "metrics": {
       "type": "object",
       "additionalProperties": false,
@@ -177,14 +195,80 @@
         "annotations": {"type": "object", "additionalProperties": {"type": "string"}}
       }
     },
+    "networkPolicyPeer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "podSelector": {"$ref": "#/definitions/labelSelector"},
+        "namespaceSelector": {"$ref": "#/definitions/labelSelector"},
+        "ipBlock": {"$ref": "#/definitions/ipBlock"}
+      },
+      "oneOf": [
+        {
+          "required": ["ipBlock"],
+          "not": {"anyOf": [{"required": ["podSelector"]}, {"required": ["namespaceSelector"]}]}
+        },
+        {
+          "anyOf": [{"required": ["podSelector"]}, {"required": ["namespaceSelector"]}],
+          "not": {"required": ["ipBlock"]}
+        }
+      ]
+    },
+    "labelSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "matchLabels": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "matchExpressions": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "operator"],
+            "properties": {
+              "key": {"type": "string", "minLength": 1},
+              "operator": {"type": "string", "enum": ["In", "NotIn", "Exists", "DoesNotExist"]},
+              "values": {
+                "type": "array",
+                "maxItems": 256,
+                "items": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "ipBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cidr"],
+      "properties": {
+        "cidr": {
+          "type": "string",
+          "pattern": "^([0-9A-Fa-f:.]+)/[0-9]{1,3}$"
+        },
+        "except": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "pattern": "^([0-9A-Fa-f:.]+)/[0-9]{1,3}$"
+          }
+        }
+      }
+    },
     "probe": {
       "type": "object",
       "additionalProperties": false,
       "required": ["failureThreshold", "periodSeconds", "timeoutSeconds"],
       "properties": {
-        "failureThreshold": {"type": "integer", "minimum": 1},
-        "periodSeconds": {"type": "integer", "minimum": 1},
-        "timeoutSeconds": {"type": "integer", "minimum": 1}
+        "failureThreshold": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "periodSeconds": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "timeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 2147483647}
       }
     },
     "policy": {

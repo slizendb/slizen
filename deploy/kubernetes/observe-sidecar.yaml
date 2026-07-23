@@ -1,6 +1,9 @@
 # Concrete observe-first sidecar pattern. Replace the redis-cli workload with
 # your application container, but keep both containers in the same Pod and
 # point the application at 127.0.0.1:6380.
+# The admin listener is loopback-only. A staging soak requires a platform agent
+# or monitoring sidecar that can scrape http://127.0.0.1:9090/metrics from this
+# Pod; do not expose the complete admin API merely to make scraping convenient.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -12,8 +15,11 @@ data:
     mode = "observe"
 
     [proxy]
-    listen = "0.0.0.0:6380"
-    read_timeout = "3s"
+    # Sidecar clients share this Pod, so keep unauthenticated RESP on loopback.
+    listen = "127.0.0.1:6380"
+    # Idle downstream connection deadline; tune above the client pool's
+    # expected idle/reuse interval to avoid reconnect churn.
+    read_timeout = "5m"
     write_timeout = "3s"
     shutdown_timeout = "10s"
     max_command_bytes = 1048576
@@ -26,7 +32,8 @@ data:
     expose_raw_keys = false
 
     [upstream]
-    # Replace with the original Redis/Valkey endpoint before applying.
+    # Replace with a private plaintext Redis/Valkey endpoint before applying.
+    # v0.2 has no built-in upstream TLS.
     address = "redis.default.svc.cluster.local:6379"
     database = 0
     dial_timeout = "2s"
@@ -74,6 +81,8 @@ spec:
   replicas: 1
   minReadySeconds: 5
   strategy:
+    # Safe for this observe-only example. Before enabling cache, use Recreate
+    # with one active replica or explicitly accept cross-Pod TTL staleness.
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 0
@@ -128,11 +137,15 @@ spec:
             runAsNonRoot: true
             runAsUser: 999
         - name: slizen
-          image: ghcr.io/slizendb/slizen:0.2.3
+          # Verified stable multi-architecture image index. Update only after
+          # a newer release digest exists and rollback has been rehearsed.
+          image: ghcr.io/slizendb/slizen@sha256:7989b6ff17659b3f1b2f1d3feec8af6422b48f1f5486eb77247a5c82ba86b627
           imagePullPolicy: IfNotPresent
           args:
             - --config
             - /etc/slizen/slizen.toml
+          # For an authenticated origin, add the required Secret refs from
+          # deploy/kubernetes/README.md. Keep this no-auth example fail-simple.
           ports:
             - name: redis
               containerPort: 6380

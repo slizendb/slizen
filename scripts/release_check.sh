@@ -71,7 +71,8 @@ validate_workload_evidence() {
     --argjson expected_request_limit "${expected_request_limit}" \
     --argjson expected_flash_every "${expected_flash_every}" '
     def known_version:
-      type == "string" and length > 0 and ascii_downcase != "unknown";
+      type == "string"
+      and (gsub("^\\s+|\\s+$"; "") | length > 0 and ascii_downcase != "unknown");
     .name == "Slizen Release Workload Benchmark"
     and .scenario_selection == "all"
     and .key_prefix == $key_prefix
@@ -86,9 +87,10 @@ validate_workload_evidence() {
     and (.runtime_versions.origin | known_version)
     and .max_requests_per_phase == $expected_request_limit
     and .flash_key_moves_every_operations == $expected_flash_every
-    and (.scenarios | type == "array" and length == 4)
-    and ((.scenarios | map(.name) | sort) == ["moving-flash", "skew-80-20", "skew-99-1", "uniform"])
-    and all(.scenarios[];
+      and (.scenarios | type == "array" and length == 4)
+      and ((.scenarios | map(.name) | sort) == ["moving-flash", "skew-80-20", "skew-99-1", "uniform"])
+      and ((.scenarios | map(.origin.origin_run_id) | unique | length) == 1)
+      and all(.scenarios[];
       .evidence_valid == true
       and .origin.operation_attempts == $expected_request_limit
       and .origin.termination_reason == "request_limit"
@@ -112,6 +114,12 @@ validate_workload_evidence() {
       and .slizen.validation_mismatches == 0
       and (.slizen.cache_hits | type == "number")
       and (.slizen.cache_misses | type == "number")
+      and .origin.upstream_gets_source == "origin_info_commandstats"
+      and .slizen.upstream_gets_source == "origin_info_commandstats"
+      and (.origin.origin_run_id | type == "string" and length > 0)
+      and .slizen.origin_run_id == .origin.origin_run_id
+      and .origin.upstream_gets == .origin.reads
+      and .slizen.upstream_gets == .slizen.slizen_status_upstream_gets
       and (.slizen.cache_misses_policy_bypass | type == "number")
       and (.slizen.cache_misses_not_admitted | type == "number")
       and (.slizen.cache_misses_not_present | type == "number")
@@ -193,6 +201,9 @@ if [[ -f scripts/demo_report.sh ]]; then
 fi
 if [[ -f scripts/release_evidence.sh ]]; then
   bash -n scripts/release_evidence.sh
+fi
+if [[ -f scripts/package_release_artifacts.sh ]]; then
+  bash -n scripts/package_release_artifacts.sh
 fi
 
 step "documentation make targets"
