@@ -104,7 +104,7 @@ jobs:
           provenance: mode=max
           sbom: true
       - name: Attest published image
-        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-name: ghcr.io/slizendb/slizen
           subject-digest: ${{ steps.push.outputs.digest }}
@@ -116,11 +116,11 @@ jobs:
           SLIZEN_COMMIT: ${{ github.sha }}
         run: ./scripts/release_evidence.sh
       - name: Attest release Helm chart
-        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: tmp/slizen-${{ needs.validate.outputs.version }}.tgz
       - name: Attest release raw sidecar manifest
-        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: tmp/slizen-observe-sidecar-${{ needs.validate.outputs.version }}.yaml
       - name: Upload immutable-image evidence
