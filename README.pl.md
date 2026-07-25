@@ -6,18 +6,26 @@
 
 Polski · [English](README.md) · [Русский](README.ru.md)
 
-**Wersja deweloperska.** Lokalny cache dla gorących kluczy w Redis i Valkey.
+**Mniej odczytów ze źródłowego Redis lub Valkey, gdy niewielka grupa kluczy
+dominuje ruch.**
 
-Slizen to jednowęzłowy serwer proxy RESP dla obciążeń z przewagą odczytów.
-Wykrywa gorące klucze, umieszcza je w ograniczonym lokalnym cache i scala
-równoczesne odczyty, gdy brakuje wpisu w cache. Redis lub Valkey pozostaje
-źródłem prawdy.
+Slizen to samodzielnie hostowany, jednowęzłowy serwer proxy RESP. Wykrywa gorące
+klucze, umieszcza je w ograniczonym lokalnym cache i scala równoczesne odczyty,
+gdy brakuje wpisu w cache. Redis lub Valkey pozostaje źródłem prawdy.
 
-Slizen sprawdza się, gdy niewielka grupa kluczy odpowiada za większość odczytów,
-a ograniczenie obciążenia źródła jest ważniejsze niż usunięcie opóźnienia
-proxy. Nie jest przeznaczony do Redis Cluster, przełączania awaryjnego Sentinel,
-szerokiej zgodności z poleceniami Redis ani obciążeń, w których bezpośrednie
-zapisy do źródła muszą być widoczne natychmiast.
+[![W obciążeniu skew-99/1 wersji v0.2.3-rc.1 Slizen ograniczył liczbę fizycznych poleceń GET do źródła z 94 961 do 759](.github/assets/slizen-origin-relief.gif)](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1)
+
+*v0.2.3-rc.1, skew-99/1: 94 961 bezpośrednich fizycznych poleceń `GET` do
+źródła wobec 759 przez Slizen w 100 000 operacji (o 99,2% mniej), bez błędów i
+niezgodności. Bezpośredni p99 był niższy: 1,53 ms wobec 2,05 ms.
+[Metodyka](docs/BENCHMARKING.md) ·
+[Dane z wydania](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1)*
+
+**Wersja deweloperska.** Slizen sprawdza się, gdy ograniczenie obciążenia źródła
+jest ważniejsze niż usunięcie opóźnienia proxy. Nie jest przeznaczony do Redis
+Cluster, przełączania awaryjnego Sentinel, szerokiej zgodności z poleceniami
+Redis ani obciążeń, w których bezpośrednie zapisy do źródła muszą być widoczne
+natychmiast.
 
 **Status wydania:** [v0.2.2](https://github.com/slizendb/slizen/releases/tag/v0.2.2)
 jest stabilną wersją deweloperską.
@@ -25,6 +33,8 @@ jest stabilną wersją deweloperską.
 **Wersja przedpremierowa v0.2.3-rc.1 do testów stagingowych:** bieżące
 źródła odpowiadają
 [v0.2.3-rc.1](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1).
+
+![SlizenDB w budowie: mały zespół rozwija cache, łapie błędy i pracuje nad niezawodnością](.github/assets/slizen-work-in-progress.png)
 
 > [!WARNING]
 > v0.2 nie obsługuje uwierzytelniania ani TLS po stronie RESP, TLS do źródła

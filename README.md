@@ -6,22 +6,33 @@
 
 [Polski](README.pl.md) · [Русский](README.ru.md)
 
-**Developer preview.** A local hot-key cache for Redis and Valkey.
+**Reduce Redis and Valkey origin load when a small set of keys dominates
+reads.**
 
-Slizen is a single-node RESP proxy for read-heavy workloads. It detects hot
-keys, admits them to a bounded local cache, and coalesces concurrent misses.
-Redis or Valkey remains the source of truth.
+Slizen is a self-hosted, single-node RESP proxy. It detects hot keys, admits
+them to a bounded local cache, and coalesces concurrent misses. Redis or Valkey
+remains the source of truth.
 
-Slizen is useful when a small set of keys dominates reads and reducing origin
-load matters more than removing proxy latency. It is not a fit for Redis
-Cluster, Sentinel failover, broad Redis command compatibility, or workloads
-that require direct upstream writes to become visible immediately.
+[![Slizen reduced physical origin GETs from 94,961 to 759 in the v0.2.3-rc.1 skew-99/1 workload](.github/assets/slizen-origin-relief.gif)](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1)
+
+*v0.2.3-rc.1, skew-99/1: 94,961 direct physical origin `GET`s versus 759
+through Slizen across 100,000 operations (99.2% fewer), with zero failures or
+mismatches. Direct p99 was lower: 1.53 ms versus 2.05 ms.
+[Methodology](docs/BENCHMARKING.md) ·
+[Release evidence](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1)*
+
+**Developer preview.** Slizen is useful when reducing origin load matters more
+than removing proxy latency. It is not a fit for Redis Cluster, Sentinel
+failover, broad Redis command compatibility, or workloads that require direct
+upstream writes to become visible immediately.
 
 **Release status:** [v0.2.2](https://github.com/slizendb/slizen/releases/tag/v0.2.2)
 is the stable developer preview.
 
 **v0.2.3-rc.1 prerelease for staging trials:** this source tree tracks
 [v0.2.3-rc.1](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1).
+
+![SlizenDB under construction: small maintainers building a cache, chasing bugs, and working through reliability tasks](.github/assets/slizen-work-in-progress.png)
 
 > [!WARNING]
 > v0.2 has no downstream RESP authentication or TLS, no upstream TLS, and no
