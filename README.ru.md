@@ -6,6 +6,8 @@
 
 [Polski](README.pl.md) · [English](README.md)
 
+![SlizenDB в процессе разработки: маленькая команда строит кэш, ловит ошибки и работает над надёжностью](.github/assets/slizen-work-in-progress.png)
+
 **Снижает нагрузку чтения на Redis или Valkey, когда небольшая группа ключей
 доминирует в трафике.**
 
@@ -34,8 +36,6 @@ Slizen — самостоятельно развёртываемый одноу�
 **v0.2.3-rc.1 — prerelease для тестирования в staging:** текущий исходный код
 соответствует
 [v0.2.3-rc.1](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1).
-
-![SlizenDB в процессе разработки: маленькая команда строит кэш, ловит ошибки и работает над надёжностью](.github/assets/slizen-work-in-progress.png)
 
 > [!WARNING]
 > В v0.2 нет аутентификации и TLS на входящем RESP-соединении, TLS для

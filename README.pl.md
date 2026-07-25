@@ -6,6 +6,8 @@
 
 Polski · [English](README.md) · [Русский](README.ru.md)
 
+![SlizenDB w budowie: mały zespół rozwija cache, łapie błędy i pracuje nad niezawodnością](.github/assets/slizen-work-in-progress.png)
+
 **Mniej odczytów ze źródłowego Redis lub Valkey, gdy niewielka grupa kluczy
 dominuje ruch.**
 
@@ -33,8 +35,6 @@ jest stabilną wersją deweloperską.
 **Wersja przedpremierowa v0.2.3-rc.1 do testów stagingowych:** bieżące
 źródła odpowiadają
 [v0.2.3-rc.1](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1).
-
-![SlizenDB w budowie: mały zespół rozwija cache, łapie błędy i pracuje nad niezawodnością](.github/assets/slizen-work-in-progress.png)
 
 > [!WARNING]
 > v0.2 nie obsługuje uwierzytelniania ani TLS po stronie RESP, TLS do źródła

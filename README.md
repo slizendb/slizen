@@ -6,6 +6,8 @@
 
 [Polski](README.pl.md) · [Русский](README.ru.md)
 
+![SlizenDB under construction: small maintainers building a cache, chasing bugs, and working through reliability tasks](.github/assets/slizen-work-in-progress.png)
+
 **Reduce Redis and Valkey origin load when a small set of keys dominates
 reads.**
 
@@ -31,8 +33,6 @@ is the stable developer preview.
 
 **v0.2.3-rc.1 prerelease for staging trials:** this source tree tracks
 [v0.2.3-rc.1](https://github.com/slizendb/slizen/releases/tag/v0.2.3-rc.1).
-
-![SlizenDB under construction: small maintainers building a cache, chasing bugs, and working through reliability tasks](.github/assets/slizen-work-in-progress.png)
 
 > [!WARNING]
 > v0.2 has no downstream RESP authentication or TLS, no upstream TLS, and no

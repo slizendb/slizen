@@ -249,8 +249,21 @@ func startSlizend(t *testing.T, mode string) slizenEnv {
 		t.Fatalf("integration origin %s is not reachable: %v", originAddr, err)
 	}
 
-	proxyAddr := freeAddr(t)
-	adminAddr := freeAddr(t)
+	listeners := make([]net.Listener, 2)
+	for i := range listeners {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		listeners[i] = listener
+	}
+	t.Cleanup(func() {
+		for _, listener := range listeners {
+			_ = listener.Close()
+		}
+	})
+	proxyAddr := listeners[0].Addr().String()
+	adminAddr := listeners[1].Addr().String()
 	cfg := fmt.Sprintf(`
 mode = %q
 
@@ -312,11 +325,20 @@ format = "json"
 	cmd.Stdout = &logs
 	cmd.Stderr = &logs
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	for _, listener := range listeners {
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	done := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = cmd.Wait()
+		close(done)
+	}()
 	t.Cleanup(func() {
 		signalProcess(cmd, syscall.SIGTERM)
 		select {
@@ -332,6 +354,11 @@ format = "json"
 
 	adminURL := "http://" + adminAddr
 	waitUntil(t, 20*time.Second, func() bool {
+		select {
+		case <-done:
+			t.Fatalf("slizend exited before becoming ready: %v\n%s", waitErr, logs.String())
+		default:
+		}
 		resp, err := http.Get(adminURL + "/readyz")
 		if err != nil {
 			return false
@@ -437,16 +464,6 @@ func waitUntil(t *testing.T, timeout time.Duration, ready func() bool) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("condition was not met within %s", timeout)
-}
-
-func freeAddr(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-	return listener.Addr().String()
 }
 
 func uniqueKey(t *testing.T, suffix string) string {
